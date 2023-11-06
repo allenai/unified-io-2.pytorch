@@ -8,14 +8,23 @@ import lightning as L
 import torch
 from lightning.fabric.loggers import CSVLogger
 from lightning.fabric.strategies import FSDPStrategy
-from lightning.fabric.utilities import ThroughputMonitor, measure_flops
+# from lightning.fabric.utilities import ThroughputMonitor, measure_flops
 
 # support running without installing as a package
 wd = Path(__file__).parent.parent.resolve()
 sys.path.append(str(wd))
 
-# from generate.base import generate
+from unified_io_2.utils import (
+    get_default_supported_precision,
+    load_checkpoint,
+    num_parameters,
+)
 
+from unified_io_2.config import Config, T5Config, AudioViTVQGANConfig, VAEConfig
+from unified_io_2.model import UnifiedIO
+
+
+# from generate.base import generate
 eval_interval = 600
 save_interval = 1000
 eval_iters = 100
@@ -40,7 +49,7 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
 
 def setup(
     data_dir: Path = Path("data/alpaca"),
-    checkpoint_dir: Path = Path("checkpoints/stabilityai/stablelm-base-alpha-3b"),
+    checkpoint_dir: Path = Path("unified-io-2_large_instructional_tunning_2M.npz"),
     out_dir: Path = Path("out/full/alpaca"),
     precision: Optional[str] = None,
 ) -> None:
@@ -49,36 +58,40 @@ def setup(
     fabric_devices = devices
     if fabric_devices > 1:
         strategy = FSDPStrategy(
-            auto_wrap_policy={Block},
-            activation_checkpointing_policy={Block},
+            auto_wrap_policy={},
+            activation_checkpointing_policy={},
             state_dict_type="full",
             limit_all_gathers=True,
             cpu_offload=False,
         )
     else:
         strategy = "auto"
-
+        
     logger = CSVLogger(out_dir.parent, out_dir.name, flush_logs_every_n_steps=log_interval)
     fabric = L.Fabric(devices=fabric_devices, strategy=strategy, precision=precision, loggers=logger)
     fabric.print(hparams)
     fabric.launch(main, data_dir, checkpoint_dir, out_dir)
     
 def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path) -> None:
-    check_valid_checkpoint_dir(checkpoint_dir)
-
     fabric.seed_everything(1337)  # same seed for every process to init model (FSDP)
 
     if fabric.global_rank == 0:
         os.makedirs(out_dir, exist_ok=True)
         
-    train_data = torch.load(data_dir / "train.pt")
-    val_data = torch.load(data_dir / "test.pt")
-
-    config = Config.from_name(name=checkpoint_dir.name)
-    checkpoint_path = checkpoint_dir / "lit_model.pth"
+    # train_data = torch.load(data_dir / "train.pt")
+    # val_data = torch.load(data_dir / "test.pt")
+    config = Config(
+        t5_config = T5Config(
+            vocab_size=33280
+        ),
+        image_vae = VAEConfig(),
+        audio_vae = AudioViTVQGANConfig(),
+    )
+    
+    checkpoint_path = checkpoint_dir
     fabric.print(f"Loading model {str(checkpoint_path)!r} with {config.__dict__}")
     with fabric.init_module(empty_init=(devices > 1)):
-        model = GPT(config)
+        model = UnifiedIO(config)
 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
     
