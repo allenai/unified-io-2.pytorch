@@ -38,13 +38,13 @@ class UnifiedIO(nn.Module):
     }
 
     # For encoding the inputs
-    self.input_encoders = {k: v.get_encoder(self.config, input_shared_embedding.get(k, None))
+    self.input_encoders = {k: v.get_encoder(cfg, input_shared_embedding.get(k, None))
                            for k, v in modality_processing.get_input_modalities().items()}
 
-    self.target_encoders = {k: v.get_encoder(self.config, target_shared_embedding.get(k, None))
+    self.target_encoders = {k: v.get_encoder(cfg, target_shared_embedding.get(k, None))
                            for k, v in modality_processing.get_target_modalities().items()}
 
-    self.target_decoders = {k: v.get_decoder(self.config, target_shared_embedding.get(k, None))
+    self.target_decoders = {k: v.get_decoder(cfg, target_shared_embedding.get(k, None))
                            for k, v in modality_processing.get_target_modalities().items()}
     
     
