@@ -21,13 +21,8 @@ def get_input_modalities(
   use_audio_vit = False,
   use_image_history_vit = False,
   use_audio_history_vit = False,
-  v1=False
   ) -> Any:
-  if v1:
-    return dict(
-      text=InputTextEncoder(),
-      image=InputImageProcessorV1()
-    )
+  
   out = dict()
   if 'text' in input_modality: 
     out["text"] = InputTextEncoder()
@@ -51,4 +46,20 @@ def get_input_modalities(
   
   if 'audio_history' in input_modality:
     out["audio_history"] = InputAudioHistoryViTEncoder(audio_encoder if use_audio_history_vit else None, audio_history_cfg, max_audio_history)
+  return out
+
+def get_target_modalities(
+    target_modality=['text', 'image', 'audio'],
+    sample_target_image=None,
+    image_vae_config: ImageViTVQGANConfig=VAEConfig(),
+    audio_vae_config: AudioViTVQGANConfig=AudioViTVQGANConfig(),
+  ) -> Any:
+  out = {}
+  if 'text' in target_modality:
+    out['text'] = TargetTextEncoder()
+  if 'image' in target_modality:
+    out['image'] = TargetImageDVAEEmbedder(image_vae_config)
+  if 'audio' in target_modality:
+    out['audio'] = TargetAudioDVAEEmbedder(audio_vae_config)
+
   return out
