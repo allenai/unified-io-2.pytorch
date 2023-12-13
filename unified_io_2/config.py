@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence, Optional, List, Union
 
-import torch
+# import torch
 from typing_extensions import Self
 import math
 
@@ -173,7 +173,7 @@ class ImageVitFeatureConfig:
   pos_patch_size: int = 16
   emb_dim: int = 768
   num_heads: int = 12
-  num_layers: int = 12
+  num_layers: int = 11 # -2 layer
   head_dim: int = 64
   mlp_dim: int = 3072
   mlp_activations: Sequence[str] = ('gelu',)
@@ -191,9 +191,9 @@ class AudioVitFeatureConfig:
   pos_patch_size: int = 16
   emb_dim: int = 768
   num_heads: int = 12
-  num_layers: int = 4
+  num_layers: int = 11 # -2 layer
   head_dim: int = 64
-  mlp_dim: int = 2048
+  mlp_dim: int = 3072
   mlp_activations: Sequence[str] = ('gelu',)
   dropout_rate: float = 0.0
   dropout_broadcast_dims: Sequence[int] = ()

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ContextManager, Dict, List, Mapping, Optional,
 import lightning as L
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 import torch.utils._device
 from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities.load import _lazy_load as lazy_load
