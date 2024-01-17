@@ -9,12 +9,16 @@ from typing_extensions import Self
 from unified_io_2.config import Config, T5Config
 from unified_io_2 import modality_processing
 
+
 class UnifiedIO(nn.Module):
   """An encoder-decoder Transformer model."""
-  def __init__(self, config: Config) -> None:
+  def __init__(self, t5_config, input_encoders, target_encoders) -> None:
     super().__init__()
-    self.config = config
-    cfg = config.t5_config
+    self.t5_config = t5_config
+    self.input_encoders = input_encoders
+    self.target_encoders = target_encoders
+
+    cfg = t5_config
     self.text_token_embedder = nn.Embedding(
         num_embeddings=cfg.vocab_size,
         embedding_dim=cfg.emb_dim)
@@ -38,18 +42,14 @@ class UnifiedIO(nn.Module):
     }
 
     # For encoding the inputs
-    self.input_encoders = {k: v.get_encoder(cfg, input_shared_embedding.get(k, None))
-                           for k, v in modality_processing.get_input_modalities().items()}
+    self.input_embedders = {k: v.get_encoder(cfg, input_shared_embedding.get(k, None))
+                            for k, v in self.input_encoders.items()}
 
-    self.target_encoders = {k: v.get_encoder(cfg, target_shared_embedding.get(k, None))
-                           for k, v in modality_processing.get_target_modalities().items()}
+    self.target_embedders = {k: v.get_encoder(cfg, target_shared_embedding.get(k, None))
+                             for k, v in self.target_encoders.items()}
 
     self.target_decoders = {k: v.get_decoder(cfg, target_shared_embedding.get(k, None))
-                           for k, v in modality_processing.get_target_modalities().items()}
-    
-    
-    
-    import pdb; pdb.set_trace()
-    
+                            for k, v in self.target_encoders.items()}
+
   def forward(self, idx: torch.Tensor, input_pos: Optional[torch.Tensor] = None) -> torch.Tensor:
-    pass
+    raise NotImplementedError()

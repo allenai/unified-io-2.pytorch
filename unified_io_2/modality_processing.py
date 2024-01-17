@@ -1,65 +1,163 @@
-
+import numpy as np
+import tensorflow as tf
 from collections import OrderedDict
 from typing import Dict, Mapping, Optional, List, Tuple, Any
+import logging
 
-from unified_io_2.vit import ImageFeature
-from unified_io_2.ast import AudioFeature
-from unified_io_2.config import ImageVitFeatureConfig, AudioVitFeatureConfig, ImageResamplerConfig, AudioResamplerConfig, VAEConfig
+from unified_io_2 import config
+from unified_io_2.audio_utils import read_audio_file, extract_spectrograms_from_audio
+from unified_io_2.data_utils import resize_and_pad, resize_and_pad_default
+from unified_io_2.utils import flatten_dict, unflatten_dict
 
-from unified_io_2.input_modalities import *
-from unified_io_2.target_modalities import *
 
-def get_input_modalities(
-  input_modality=['text', 'image', 'image_history', 'audio', 'audio_history'],
-  image_vit_cfg: ImageVitFeatureConfig=ImageVitFeatureConfig(),
-  audio_vit_cfg: AudioVitFeatureConfig=AudioVitFeatureConfig(),
-  image_history_cfg: ImageResamplerConfig=ImageResamplerConfig(),
-  audio_history_cfg: AudioResamplerConfig=AudioResamplerConfig(),
-  max_img_history=None,
-  max_audio_history=None,
-  use_image_vit = False,
-  use_audio_vit = False,
-  use_image_history_vit = False,
-  use_audio_history_vit = False,
-  ) -> Any:
-  
-  out = dict()
-  if 'text' in input_modality: 
-    out["text"] = InputTextEncoder()
-        
-  image_encoder = None
-  if use_image_vit or use_image_history_vit:
-    image_encoder = ImageFeature(image_vit_cfg)
+def build_spectogram(audio):
+  if isinstance(audio, str):
+    waveform = read_audio_file(audio)
+  elif len(audio.shape) == 1:
+    # Assume a already a waveform
+    waveform = audio
+  elif len(audio.shape) == 2:
+    # Assume already a spectogram
+    return audio
+  return extract_spectrograms_from_audio(waveform)
 
-  audio_encoder = None
-  if use_audio_vit or use_audio_history_vit:
-    audio_encoder = AudioFeature(audio_vit_cfg)
 
-  if 'image' in input_modality:
-    out["image"] = InputImageViTEncoder(image_encoder if use_image_vit else None, use_image_vit)
-  
-  if 'image_history' in input_modality:
-    out["image_history"] = InputImageHistoryViTEncoder(image_encoder if use_image_history_vit else None, image_history_cfg, max_img_history)
+class UnifiedIOPreprocessing:
+  def __init__(
+      self,
+      input_encoders,
+      target_encoders,
+      sequence_length,
+      tokenizer
+  ):
+    self.input_encoders = input_encoders
+    self.target_encoders = target_encoders
+    self.sequence_length = sequence_length
+    self.tokenizer = tokenizer
 
-  if 'audio' in input_modality:
-    out["audio"] = InputAudioViTEncoder(audio_encoder if use_audio_vit else None, use_audio_vit)
-  
-  if 'audio_history' in input_modality:
-    out["audio_history"] = InputAudioHistoryViTEncoder(audio_encoder if use_audio_history_vit else None, audio_history_cfg, max_audio_history)
-  return out
+  def load_image(self, image):
+    try:
+      from PIL import Image
+    except ImportError:
+      raise ImportError("Loading images require PIL to be installed")
+    with Image.open(image) as img:
+      return np.array(img)
 
-def get_target_modalities(
-    target_modality=['text', 'image', 'audio'],
-    sample_target_image=None,
-    image_vae_config: ImageViTVQGANConfig=VAEConfig(),
-    audio_vae_config: AudioViTVQGANConfig=AudioViTVQGANConfig(),
-  ) -> Any:
-  out = {}
-  if 'text' in target_modality:
-    out['text'] = TargetTextEncoder()
-  if 'image' in target_modality:
-    out['image'] = TargetImageDVAEEmbedder(image_vae_config)
-  if 'audio' in target_modality:
-    out['audio'] = TargetAudioDVAEEmbedder(audio_vae_config)
+  def __call__(
+      self, text_inputs, text_targets=None,
+      image_inputs=None, audio_inputs=None, video_inputs=None,
+      audio_history_inputs=None, image_targets=None, audio_targets=None,
+      choices=None, is_training=False
+  ):
+    """General pre-processing function
 
-  return out
+    Args:
+      text_inputs: int32 array of tokenized text inputs (without EOS) or tf.string scalar,
+                   the prompt/input text to the model
+      text_targets: int32 array tokenized of text inputs (without EOS) or
+                    tf.string scalar, the the output text to generate.
+                    Can also be a list of string tensors or ragged int32 tensor to represent
+                    multiple correct answer options
+      target_boxes: dict
+      image_inputs: RGB image size `IMAGE_INPUT_SIZE`  in float32 format, the input image
+      audio_inputs: Audio spectrogram [256, 128]
+      video_inputs: RGB by time video in float32 format
+      audio_history_inputs: Audio spectrogram history [N, 256, 128]
+      image_targets: (optional) RGB image of `IMAGE_TARGET_SIZE` in float32 format, the target
+                     image to generate
+      audio_targets: Audio spectrogram target
+      choices: List of strings or ragged int32 tensor of text answer options
+    """
+    targets = [image_targets, audio_targets, text_targets]
+    assert sum(x is not None for x in targets) <= 1, "Can have at most one target"
+    features = dict(
+      text_inputs=text_inputs,
+      text_targets=text_targets,
+    )
+
+    if image_inputs is not None:
+      if isinstance(image_inputs, str):
+        image_inputs = self.load_image(image_inputs)
+      image_inputs, image_inputs_mask, other = resize_and_pad_default(
+        image_inputs, is_training,
+        masks=image_targets, is_input=True)
+      features["meta/image_info"] = other[1]
+      features["image_inputs"] = image_inputs
+      features["image_input_masks"] = image_inputs_mask
+      if image_targets is not None:
+        features["image_targets"] = other[1][0]
+        features["image_target_masks"] = other[1][1]
+      features["meta/image_info"] = other[0]
+    elif image_targets is not None:
+      if isinstance(image_targets, str):
+        image_targets = self.load_image(image_targets)
+      image_targets, image_targets_mask, other = resize_and_pad_default(
+        image_targets, is_training, is_input=False)
+      features["meta/image_info"] = other[0]
+      features["image_targets"] = image_targets
+      features["image_target_masks"] = image_targets_mask
+
+    if audio_inputs is not None:
+      features["audio_inputs"], features["audio_inputs_masks"] = build_spectogram(audio_inputs)
+
+    if audio_targets is not None:
+      features["audio_targets"], features["audio_targets_masks"] = build_spectogram(audio_targets)
+
+    features = self.unified_io_preprocessor(features)
+    features = self.final_preprocesor(features)
+    return {k: v.numpy() for k, v in features.items()}
+
+  def unified_io_preprocessor(self, features):
+    input_features = {}
+    for k, v in self.input_encoders.items():
+      input_features[k] = v.preprocess_inputs(features, self.tokenizer, self.sequence_length)
+
+    target_features = {}
+    for k, v in self.target_encoders.items():
+      target_features[k] = v.preprocess_inputs(features, self.sequence_length)
+
+    # Extra features that might be needed by metric functions or for evaluations
+    if "meta" in features:
+      meta = features["meta"]
+    else:
+      meta = {}
+    for k in features:
+      if k.startswith("meta/"):
+        meta[k] = features[k]
+
+    out = dict(
+      inputs=input_features,
+      targets=target_features,
+      meta=meta
+    )
+
+    # If there are answer choices, they need to be passed through to the model
+    if "choices" in features:
+      out["choices"] = features["choices"]
+
+    return out
+
+  def final_preprocesor(self, features):
+    converted_input_features = {}
+    for k, v in self.input_encoders.items():
+      converted_input_features[k] = v.convert_inputs(
+        features["inputs"].get(k), self.sequence_length)
+
+    converted_target_features = {}
+    for k, v in self.target_encoders.items():
+      converted_target_features[k] = v.convert_inputs(
+        features["targets"].get(k), self.sequence_length)
+
+    output_features = dict(
+      inputs=converted_input_features,
+      targets=converted_target_features
+    )
+
+    # Special cases that might need to be used inference
+    if "choices" in features:
+      output_features["choices"] = self.target_encoders["text"].convert_choices(
+        features["choices"], self.sequence_length)
+    for k in ["image_info", "box"]:
+      if k in features:
+        output_features[k] = features[k]
+    return flatten_dict(output_features, sep="/")

@@ -1,29 +1,35 @@
+import functools
 from dataclasses import dataclass
 from typing import Dict, Optional, Union
 
+import einops
 import torch
 import torch.nn as nn
 
+from unified_io_2.data_utils import normalize_image, sample_patches, trim_or_pad_tf_2d
 from unified_io_2.seq_features import InputSequence
 from unified_io_2.config import *
-from unified_io_2 import layers
+from unified_io_2 import layers, config
 from unified_io_2.perceiver import Resampler
+import tensorflow as tf
+import numpy as np
+
 
 class ModalityEncoder:
   """Converts features for a particular modality into a input or target sequence"""
 
   def preprocess_inputs(
-      self, features: Dict, output_features, sequence_length) -> Optional[Dict[str, torch.Tensor]]:
+      self, features: Dict, vocab, sequence_length) -> Optional[Dict[str, torch.Tensor]]:
     """
     Args:
       features: feature dictionary from the task, as built the by the task pre-processors
-      output_features: output features for the Task
+      vocab: tokenzier to use for text
       sequence_length: sequence length for the Task
 
     Returns: a dictionary of tensorflow tensors to use as input to `convert_inputs`,
       the dictionary can have variable length tensors.
     """
-    raise NotImplementedError()
+    raise NotImplementedError(self.__class__)
 
   def convert_inputs(self, features: Optional[Dict], sequence_length) -> Dict[str, torch.Tensor]:
     """
@@ -34,7 +40,7 @@ class ModalityEncoder:
     Returns: a dictionary of tensorflow tensor to use as inputs to `get_encoder()`,
       tensors should have a fixed size based on `sequence_length`
     """
-    raise NotImplementedError()
+    raise NotImplementedError(self.__class__)
 
   def get_encoder(self, config: Config, shared_embedding) -> nn.Module:
     """
@@ -46,20 +52,6 @@ class ModalityEncoder:
     `InputSequence` or `TargetSequence`
     """
     raise NotImplementedError()
-
-  def get_output_features(self) -> Dict[str, Any]:
-    raise NotImplementedError()
-
-  def get_constraints(self) -> Optional[int]:
-    """Returns a batch-level constraint if one are needed
-
-    If not None, inputs batches should be built such that the sum of the output
-    masks on each examples is less than or equal to the output integer.
-    """
-    return None
-
-  def get_static_sequence_len(self) -> Optional[int]:
-    return None
 
   def get_decoder(self, config, shared_embedding):
     """Return model to do decoding from the hidden states, only required for target modalities"""
@@ -107,20 +99,38 @@ class InputTextEmbedder(nn.Module):
 
     return InputSequence(embed=x, mask=mask, position_embed=pos_emb)
 
+
 class InputTextEncoder(ModalityEncoder):
   """Tokenize and embed input text"""
 
-  def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
-    pass
+  def preprocess_inputs(self, features, vocab, sequence_length) -> Dict:
+    if features.get(f"text_inputs") is None:
+      return {"tokens": tf.zeros([0], dtype=tf.int32)}
+    else:
+      text_input_len = sequence_length[f"text_inputs"]
+      text_inputs = features[f"text_inputs"]
+      if isinstance(text_inputs, str) or text_inputs.dtype == tf.dtypes.string:
+        text_inputs = vocab.encode_tf(text_inputs)
+      text_inputs = text_inputs[:text_input_len-1]  # Make sure the EOS wouldn't get truncated
+      text_inputs = tf.pad(text_inputs, paddings=[[0, 1]], constant_values=config.EOS_ID)
+      return {"tokens": text_inputs}
 
   def convert_inputs(self, features, sequence_length) -> Dict:
-    pass
+    text_len = sequence_length.get("text_inputs")
+    if text_len is None:
+      text_len = sequence_length["inputs/text/tokens"]
+    inputs = features["tokens"]
+    inputs = tf.pad(inputs, [[0, text_len - tf.shape(inputs)[0]]], constant_values=config.PAD_ID)
+    inputs = tf.ensure_shape(inputs, [text_len])
+    return {
+      "tokens": inputs,
+      "pos_ids": tf.range(text_len, dtype=tf.int32),
+      "mask": tf.cast(inputs != config.PAD_ID, tf.int32),
+    }
 
   def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
     return InputTextEmbedder(config, shared_embedding)
 
-  def get_output_features(self) -> Dict[str, Any]:
-    pass
 
 class ViTImageEmbedder(nn.Module):
   def __init__(self, image_encoder: nn.Module, t5_config: T5Config, modality: str, use_vit: bool = False) -> None:
@@ -214,6 +224,109 @@ class InputImageViTEncoder(ModalityEncoder):
   def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
     return ViTImageEmbedder(self.image_encoder, config, "image", self.use_vit)
 
+  def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
+    image_input_size = IMAGE_INPUT_SIZE
+    input_padding_size = np.array(image_input_size, dtype=np.int32) // IMAGE_INPUT_D
+    n_patches = np.prod(input_padding_size)
+
+    image_samples = sequence_length['image_input_samples']
+    if image_samples is None:
+      image_samples = n_patches
+    if isinstance(image_samples, float):
+      image_samples = int(n_patches*image_samples)
+
+    image_inputs = features.get("image_inputs")
+    if image_inputs is None:
+      return {
+        'input': tf.zeros((image_samples, 0), dtype=tf.float32),
+        'mask': tf.zeros((0,), dtype=tf.int32),
+        'pos_ids': tf.zeros((0,), dtype=tf.int32),
+      }
+
+    image_input_masks = features.get("image_input_masks")
+
+    if "image_encoder_pos_ids" in features:
+      # We assume image sampling has already been done by the task
+      # currently only happens for the image prefix modelling pre-training task
+      assert len(image_inputs.shape) == 2
+      image_inputs = tf.ensure_shape(image_inputs, [image_samples, None])
+      image_inputs = tf.reshape(
+        normalize_image(
+          tf.reshape(image_inputs, [-1, 1, 3]),
+          offset=IMAGE_VIT_MEAN,
+          scale=IMAGE_VIT_STD,
+        ), image_inputs.shape)
+      return {
+        'input': image_inputs,
+        'mask': image_input_masks,
+        'pos_ids': features["image_encoder_pos_ids"]
+      }
+
+    image_inputs = normalize_image(
+      image_inputs,
+      offset=IMAGE_VIT_MEAN,
+      scale=IMAGE_VIT_STD,
+    )
+    assert image_input_masks is not None
+    if len(image_input_masks.shape) == 1:
+      # Assume client give us a mask over the patches
+      image_input_masks = image_input_masks
+    else:
+      # Convert the pixel mask to a mask over the image patches
+      # this a rather hacky since this conversion is approximate
+      image_input_masks = tf.image.resize(
+        tf.expand_dims(image_input_masks, 2),
+        input_padding_size,
+        method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+      image_input_masks = tf.cast(tf.reshape(image_input_masks, [-1]), tf.int32)
+
+    # Arrange into a list of patches
+    image_inputs = einops.rearrange(
+      image_inputs, '(h dh) (w dw) c -> (h w) (dh dw c)',
+      dh=IMAGE_INPUT_D, dw=IMAGE_INPUT_D)
+
+    if image_samples < n_patches:
+      image_encoder_pos_ids = sample_patches(image_input_masks, image_samples)
+      image_inputs = tf.gather(image_inputs, image_encoder_pos_ids)
+      image_input_masks = tf.gather(image_input_masks, image_encoder_pos_ids)
+    else:
+      image_encoder_pos_ids = tf.range(image_samples)
+      image_encoder_pos_ids = tf.cast(image_encoder_pos_ids, tf.int32)
+
+    return {
+      'input': image_inputs,
+      'mask': image_input_masks,
+      'pos_ids': image_encoder_pos_ids
+    }
+
+  def convert_inputs(self, features, sequence_length) -> Dict:
+    if 'inputs/image/input' in sequence_length:
+      # Max lengths were computed by the Evaluator, use that
+      image_len = sequence_length['inputs/image/input']
+    else:
+      # Max length set based on the configuration
+      max_len = (IMAGE_INPUT_SIZE[0]*IMAGE_INPUT_SIZE[0]) // IMAGE_INPUT_D**2
+      image_len = sequence_length.get('image_input_samples')
+      if image_len is None:
+        image_len = max_len
+      if isinstance(image_len, float):
+        image_len = int(image_len*max_len)
+
+    n_pixels = IMAGE_INPUT_D*IMAGE_INPUT_D*3
+    if features is None or tf.shape(features["input"])[-1] == 0:
+      # Replace dummy features with full-sized masked features to keep shape consistent
+      image = tf.zeros((image_len, n_pixels), tf.float32)
+      features = {
+        'input': image,
+        'mask': tf.zeros((image_len,), tf.int32),
+        'pos_ids': tf.zeros((image_len,), tf.int32),
+      }
+
+    # If statement can screw up shape info, fix here:
+    features["input"] = tf.ensure_shape(features["input"], [image_len, n_pixels])
+    features["mask"] = tf.ensure_shape(features["mask"], [image_len])
+    features["pos_ids"] = tf.ensure_shape(features["pos_ids"], [image_len])
+    return features
 
 
 class ViTHistoryEmbedder(nn.Module):
@@ -262,7 +375,102 @@ class InputImageHistoryViTEncoder(ModalityEncoder):
     return ViTHistoryEmbedder(
       self.image_encoder, self.resampler_config, config, "image", self.max_images_per_batch)
 
-    
+  def preprocess_inputs(
+      self, features: Dict, output_features, sequence_length) -> Dict[str, tf.Tensor]:
+    input_size = IMAGE_HISTORY_INPUT_SIZE
+    total_patches = int(
+      (IMAGE_HISTORY_INPUT_SIZE[0] // IMAGE_HISTORY_INPUT_D) * (IMAGE_HISTORY_INPUT_SIZE[1] // IMAGE_HISTORY_INPUT_D)
+    )
+    n_patches = sequence_length.get('image_history_input_samples', total_patches)
+    n_frames = sequence_length.get('num_frames')
+    n_pixels = IMAGE_HISTORY_INPUT_D*IMAGE_HISTORY_INPUT_D*3
+
+    input = features.get("image_history_inputs")
+    if input is None:
+      return {
+        'input': tf.zeros((0, n_patches, n_pixels), dtype=tf.float32),
+        'mask': tf.zeros((0, 0,), dtype=tf.int32),
+        'pos_ids': tf.zeros((0, 0,), dtype=tf.int32),
+      }
+
+    input_padding_size = np.array(input_size, dtype=np.int32) // IMAGE_HISTORY_INPUT_D
+    assert np.prod(input_padding_size) == total_patches
+    input_masks = features.get("image_history_input_masks")
+
+    if "image_history_encoder_pos_ids" in features:
+      assert len(input.shape) == 3
+      input = tf.ensure_shape(input, [n_frames, n_patches, n_pixels])
+      input = tf.reshape(normalize_video(
+        tf.reshape(input, [n_frames * n_patches, -1, 3])), input.shape)
+      return {
+        'input': input,
+        'mask': input_masks,
+        'pos_ids': features["image_history_encoder_pos_ids"],
+      }
+
+    input = normalize_video(input)
+    assert input_masks is not None
+    if len(input_masks.shape) == 2:
+      # Assume client give us a mask over the patches
+      input_masks = input_masks
+    else:
+      # Convert the pixel mask to a mask over the image patches
+      # this a rather hacky since this conversion is approximate
+      input_masks = tf.image.resize(
+        tf.expand_dims(input_masks, 3),
+        input_padding_size,
+        method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+      input_masks = tf.cast(tf.reshape(input_masks, [tf.shape(input_masks)[0], -1]), tf.int32)
+
+    # Arrange into a list of patches
+    input = einops.rearrange(
+      input, 't (h dh) (w dw) c -> t (h w) (dh dw c)',
+      dh=IMAGE_HISTORY_INPUT_D, dw=IMAGE_HISTORY_INPUT_D)
+
+    # input = trim_or_pad_tf(input, n_frames)
+    # input_masks = trim_or_pad_tf(input_masks, n_frames)
+
+    if n_patches < total_patches:
+      encoder_pos_ids = tf.map_fn(
+        fn=functools.partial(sample_patches, n_patches=n_patches),
+        elems=input_masks,
+      )
+      input = tf.gather(input, encoder_pos_ids, axis=1, batch_dims=1)
+      input_masks = tf.gather(input_masks, encoder_pos_ids, axis=1, batch_dims=1)
+    else:
+      encoder_pos_ids = tf.range(n_patches)
+      encoder_pos_ids = tf.expand_dims(encoder_pos_ids, axis=0)
+      encoder_pos_ids = tf.tile(encoder_pos_ids, [n_frames, 1])
+      encoder_pos_ids = tf.cast(encoder_pos_ids, tf.int32)
+
+    return {
+      'input': input,
+      'mask': input_masks,
+      'pos_ids': encoder_pos_ids,
+    }
+
+  def convert_inputs(self, features: Optional[Dict], sequence_length) -> Dict[str, tf.Tensor]:
+    spatial_len = features["input"].shape[1]
+    assert spatial_len is not None
+    n_pixels = IMAGE_HISTORY_INPUT_D*IMAGE_HISTORY_INPUT_D*3
+    temporal_len = sequence_length.get('num_frames')
+    if temporal_len is None:
+      temporal_len = max(sequence_length["inputs/image_history/input"], 1)
+    if features is None or tf.shape(features["input"])[0] == 0:
+      # Replace dummy features with full-sized masked features to keep shape consistent
+      return {
+        'input': tf.zeros((temporal_len, spatial_len, n_pixels), tf.float32),
+        'mask': tf.zeros((temporal_len, spatial_len,), tf.int32),
+        'pos_ids': tf.zeros((temporal_len, spatial_len,), tf.int32),
+      }
+    # Pad everything to be the same shape
+    return {
+      "input": trim_or_pad_tf_2d(features["input"], temporal_len, spatial_len),
+      "mask": trim_or_pad_tf_2d(features["mask"], temporal_len, spatial_len),
+      "pos_ids": trim_or_pad_tf_2d(features["pos_ids"], temporal_len, spatial_len)
+    }
+
+
 class InputAudioViTEncoder(ModalityEncoder):
   def __init__(self, audio_encoder, use_vit = False) -> None:
     super().__init__()
@@ -272,7 +480,101 @@ class InputAudioViTEncoder(ModalityEncoder):
   def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
     return ViTImageEmbedder(self.audio_encoder, config, "audio", self.use_vit)
 
-    
+  def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
+    audio_input_size = AUDIO_INPUT_SIZE
+    audio_samples = sequence_length['audio_input_samples']
+
+    audio_inputs = features.get("audio_inputs")
+    if audio_inputs is None:
+      return {
+        'input': tf.zeros((audio_samples, 0), dtype=tf.float32),
+        'mask': tf.zeros((0,), dtype=tf.int32),
+        'pos_ids': tf.zeros((0,), dtype=tf.int32),
+      }
+
+    input_padding_size = np.array(audio_input_size, dtype=np.int32) // AUDIO_INPUT_D
+    n_patches = np.prod(input_padding_size)
+    audio_input_masks = features.get("audio_input_masks")
+
+    if "audio_encoder_pos_ids" in features:
+      # We assume audio sampling has already been done by the task
+      # currently only happens for the audio prefix modelling pre-training task
+      assert len(audio_inputs.shape) == 2
+      # normalization
+      audio_inputs = (audio_inputs - AUDIO_VIT_MEAN) / AUDIO_VIT_STD
+      return {
+        'input': audio_inputs,
+        'mask': audio_input_masks,
+        'pos_ids': features["audio_encoder_pos_ids"]
+      }
+
+    audio_inputs = (audio_inputs - AUDIO_VIT_MEAN) / AUDIO_VIT_STD
+    assert audio_input_masks is not None
+    if len(audio_input_masks.shape) == 1:
+      # Assume client give us a mask over the patches
+      audio_input_masks = audio_input_masks
+    else:
+      # Convert the pixel mask to a mask over the audio patches
+      # this a rather hacky since this conversion is approximate
+      audio_input_masks = tf.image.resize(
+        tf.expand_dims(audio_input_masks, 2),
+        input_padding_size,
+        method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+      audio_input_masks = tf.cast(tf.reshape(audio_input_masks, [-1]), tf.int32)
+
+    # Arrange into a list of patches
+    audio_inputs = einops.rearrange(
+      audio_inputs, '(h dh) (w dw) c -> (h w) (dh dw c)',
+      dh=AUDIO_INPUT_D, dw=AUDIO_INPUT_D)
+
+    if audio_samples < n_patches:
+      audio_input_sample_valid = tf.boolean_mask(
+        tf.range(tf.shape(audio_input_masks)[0]), audio_input_masks)
+      audio_input_sample_masked = tf.boolean_mask(
+        tf.range(tf.shape(audio_input_masks)[0]), audio_input_masks==0)
+
+      audio_encoder_pos_ids = tf.concat([
+        tf.random.shuffle(audio_input_sample_valid),
+        tf.random.shuffle(audio_input_sample_masked)],axis=0)[:audio_samples]
+      audio_encoder_pos_ids = tf.reshape(audio_encoder_pos_ids, (audio_samples,))
+      audio_encoder_pos_ids = tf.cast(audio_encoder_pos_ids, tf.int32)
+
+      audio_inputs = tf.gather(audio_inputs, audio_encoder_pos_ids)
+      audio_input_masks = tf.gather(audio_input_masks, audio_encoder_pos_ids)
+    else:
+      audio_encoder_pos_ids = tf.range(audio_samples)
+      audio_encoder_pos_ids = tf.cast(audio_encoder_pos_ids, tf.int32)
+
+    return {
+      'input': audio_inputs,
+      'mask': audio_input_masks,
+      'pos_ids': audio_encoder_pos_ids
+    }
+
+  def convert_inputs(self, features, sequence_length) -> Dict:
+    if 'inputs/audio/input' in sequence_length:
+      # Max lengths were computed by the Evaluator, use that
+      audio_len = sequence_length['inputs/audio/input']
+    else:
+      # Max length set based on the configuration
+      max_len = (AUDIO_INPUT_SIZE[0]*AUDIO_INPUT_SIZE[0]) // AUDIO_INPUT_D**2
+      audio_len = sequence_length.get('audio_input_samples', max_len)
+    n_pixels = AUDIO_INPUT_D*AUDIO_INPUT_D*1
+    if features is None or tf.shape(features["input"])[-1] == 0:
+      # Replace dummy features with full-sized masked features to keep shape consistent
+      audio = tf.zeros((audio_len, n_pixels), tf.float32)
+      features = {
+        'input': audio,
+        'mask': tf.zeros((audio_len,), tf.int32),
+        'pos_ids': tf.zeros((audio_len,), tf.int32),
+      }
+    # If statement can screw up shape info, fix here:
+    features["input"] = tf.ensure_shape(features["input"], [audio_len, n_pixels])
+    features["mask"] = tf.ensure_shape(features["mask"], [audio_len])
+    features["pos_ids"] = tf.ensure_shape(features["pos_ids"], [audio_len])
+    return features
+
+
 class InputAudioHistoryViTEncoder(ModalityEncoder):
   def __init__(self, audio_encoder, resampler_config, max_images_per_batch=None) -> None:
     super().__init__()
@@ -284,4 +586,96 @@ class InputAudioHistoryViTEncoder(ModalityEncoder):
     return ViTHistoryEmbedder(
       self.audio_encoder, self.resampler_config, config, "audio", self.max_images_per_batch)
 
-  
+  def preprocess_inputs(
+      self, features: Dict, output_features, sequence_length) -> Dict[str, tf.Tensor]:
+
+    input_size = AUDIO_HISTORY_INPUT_SIZE
+    total_patches = int(
+      (AUDIO_HISTORY_INPUT_SIZE[0] // AUDIO_HISTORY_INPUT_D) * (AUDIO_HISTORY_INPUT_SIZE[1] // AUDIO_HISTORY_INPUT_D)
+    )
+    n_patches = sequence_length.get('audio_history_input_samples', total_patches)
+    n_frames = sequence_length.get('num_frames')
+    n_pixels = AUDIO_HISTORY_INPUT_D*AUDIO_HISTORY_INPUT_D*1
+
+    input = features.get("audio_history_inputs")
+    if input is None:
+      return {
+        'input': tf.zeros((0, n_patches, n_pixels), dtype=tf.float32),
+        'mask': tf.zeros((0, 0,), dtype=tf.int32),
+        'pos_ids': tf.zeros((0, 0,), dtype=tf.int32),
+      }
+
+    input_padding_size = np.array(input_size, dtype=np.int32) // AUDIO_HISTORY_INPUT_D
+    assert np.prod(input_padding_size) == total_patches
+    input_masks = features.get("audio_history_input_masks")
+
+    if "audio_history_encoder_pos_ids" in features:
+      assert len(input.shape) == 3
+      input = tf.ensure_shape(input, [n_frames, n_patches, n_pixels])
+      # normalization
+      input = (input - AUDIO_VIT_MEAN) / AUDIO_VIT_STD
+      return {
+        'input': input,
+        'mask': input_masks,
+        'pos_ids': features["audio_history_encoder_pos_ids"],
+      }
+
+    input = (input - AUDIO_VIT_MEAN) / AUDIO_VIT_STD
+    assert input_masks is not None
+    if len(input_masks.shape) == 2:
+      # Assume client give us a mask over the patches
+      input_masks = input_masks
+    else:
+      # Convert the pixel mask to a mask over the audio patches
+      # this a rather hacky since this conversion is approximate
+      input_masks = tf.image.resize(
+        tf.expand_dims(input_masks, 3),
+        input_padding_size,
+        method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+      input_masks = tf.cast(tf.reshape(input_masks, [tf.shape(input_masks)[0], -1]), tf.int32)
+
+    # Arrange into a list of patches
+    input = einops.rearrange(
+      input, 't (h dh) (w dw) c -> t (h w) (dh dw c)',
+      dh=AUDIO_HISTORY_INPUT_D, dw=AUDIO_HISTORY_INPUT_D)
+
+    if n_patches < total_patches:
+      encoder_pos_ids = tf.map_fn(
+        fn=functools.partial(sample_patches, n_patches=n_patches),
+        elems=input_masks,
+      )
+
+      input = tf.gather(input, encoder_pos_ids, axis=1, batch_dims=1)
+      input_masks = tf.gather(input_masks, encoder_pos_ids, axis=1, batch_dims=1)
+    else:
+      encoder_pos_ids = tf.range(n_patches)
+      encoder_pos_ids = tf.expand_dims(encoder_pos_ids, axis=0)
+      encoder_pos_ids = tf.tile(encoder_pos_ids, [n_frames, 1])
+      encoder_pos_ids = tf.cast(encoder_pos_ids, tf.int32)
+
+    return {
+      'input': input,
+      'mask': input_masks,
+      'pos_ids': encoder_pos_ids,
+    }
+
+  def convert_inputs(self, features: Optional[Dict], sequence_length) -> Dict[str, tf.Tensor]:
+    spatial_len = features["input"].shape[1]
+    assert spatial_len is not None
+    n_pixels = AUDIO_HISTORY_INPUT_D*AUDIO_HISTORY_INPUT_D*1
+    temporal_len = sequence_length.get('num_frames')
+    if temporal_len is None:
+      temporal_len = max(sequence_length["inputs/audio_history/input"], 1)
+    if features is None or tf.shape(features["input"])[0] == 0:
+      # Replace dummy features with full-sized masked features to keep shape consistent
+      return {
+        'input': tf.zeros((temporal_len, spatial_len, n_pixels), tf.float32),
+        'mask': tf.zeros((temporal_len, spatial_len,), tf.int32),
+        'pos_ids': tf.zeros((temporal_len, spatial_len,), tf.int32),
+      }
+    # Pad everything to be the same shape
+    return {
+      "input": trim_or_pad_tf_2d(features["input"], temporal_len, spatial_len),
+      "mask": trim_or_pad_tf_2d(features["mask"], temporal_len, spatial_len),
+      "pos_ids": trim_or_pad_tf_2d(features["pos_ids"], temporal_len, spatial_len)
+    }

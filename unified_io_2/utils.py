@@ -16,6 +16,33 @@ from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities.load import _lazy_load as lazy_load
 from torch.serialization import normalize_storage_type
 
+
+def flatten_dict(d, sep="/"):
+  _out = dict()
+
+  def _fn(part, prefix):
+    if isinstance(part, dict):
+        for k, v in part.items():
+            _fn(v, k + sep + prefix)
+    else:
+        _out[prefix] = part
+  _fn(d, prefix="")
+  return _out
+
+
+def unflatten_dict(d, sep='/'):
+  out = {}
+  for k, v in d.items():
+    parts = k.split(sep)
+    k_out = out
+    for key in parts[:-1]:
+      if key not in k_out:
+          k_out[key] = {}
+      k_out = k_out[key]
+    k_out[parts[-1]] = v
+    return k_out
+
+
 def get_default_supported_precision(training: bool) -> str:
     """Return default precision that is supported by the hardware: either `bf16` or `16`.
 
