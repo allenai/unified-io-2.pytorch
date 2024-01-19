@@ -176,13 +176,13 @@ class VisionTransformer(nn.Module):
 
     input_dim = config.patch_size * config.patch_size * 3
     self.embedding = nn.Linear(input_dim, config.emb_dim, bias=False)
-    # weight initialization
     scale = config.emb_dim
     self.class_embedding = nn.Parameter(scale * torch.randn(config.emb_dim))
     self.positional_embedding = nn.Parameter(scale * torch.randn(config.num_pos, config.emb_dim))
     self.pre_ln = layers.LayerNorm(config.emb_dim, eps=1e-5)
-    transformer_dict = param_dict['Transformer_0']
+    transformer_dict = None if param_dict is None else param_dict['Transformer_0']
     self.transformer = Transformer(config, param_dict=transformer_dict)
+    # weight initialization
     if param_dict is not None:
       with torch.no_grad():
         self.embedding.weight.data.copy_(torch.from_numpy(param_dict['embedding']['kernel']).transpose(0, 1))
@@ -255,8 +255,8 @@ if __name__ == "__main__":
   ckpt_file = "checkpoints/unified-io-2_large_instructional_tunning_2M.npz"
   param_dict = np.load(ckpt_file, allow_pickle=True)['input_image_encoder'].item()['image_encoder']['vision_transformer']
   print("Building and Initiazling pytorch vit...")
-  image_vit_cfg = ImageVitFeatureConfig()
-  image_encoder = ImageFeature(image_vit_cfg, param_dict)
+  vit_cfg = ImageVitFeatureConfig()
+  image_encoder = ImageFeature(vit_cfg, param_dict)
   image_encoder.eval()
   print("Dummy input...")
   len = 576 # 384 / 16 * 384 / 16
