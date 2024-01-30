@@ -53,7 +53,7 @@ class MultiHeadDotProductAttention(nn.Module):
     self.value_in_proj_weight = nn.Parameter(torch.randn(emb_dim, emb_dim) * self.scale)
     self.value_in_proj_bias = nn.Parameter(torch.zeros(emb_dim))
 
-    self.attn_drop = nn.Dropout(dropout_rate)
+    self.attn_drop = layers.Dropout(dropout_rate, broadcast_dims=(-2, ))
     self.out_proj = nn.Linear(emb_dim, emb_dim, bias=True)
 
     if param_dict is not None:
@@ -95,7 +95,7 @@ class MultiHeadDotProductAttention(nn.Module):
     attn_weights = torch.einsum("bqhd,bkhd->bhqk", query, key)
 
     if attn_mask is not None:
-      new_attn_mask = torch.zeros_like(attn_mask, dtype=query.dtype)
+      new_attn_mask = torch.zeros_like(attn_mask, dtype=attn_weights.dtype)
       new_attn_mask.masked_fill_(~(attn_mask > 0), -1e10)
       attn_mask = new_attn_mask
       attn_weights += attn_mask

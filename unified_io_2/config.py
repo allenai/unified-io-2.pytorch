@@ -258,7 +258,7 @@ class AudioResamplerConfig:
   mlp_dim: int = 2048
   mlp_activations: Sequence[str] = ('gelu',)
   dropout_rate: float = 0.0
-  dropout_broadcast_dims: Sequence[int] = ()
+  dropout_broadcast_dims: Sequence[int] = (-2,)
   droppath_rate: float = 0.0
   layer_drop: float = 0.0
   xattn_qk_norm: bool = True
@@ -434,6 +434,10 @@ XXL = Config(
     num_heads=16,
     head_dim=64,
     mlp_dim=4096,
+    xattn_qk_norm=False,
+    xattn_scaled_cosine=True,
+    attn_qk_norm=False,
+    attn_scaled_cosine=True,
   ),
   audio_history_cfg=dataclasses.replace(
     ImageResamplerConfig(),
@@ -441,5 +445,9 @@ XXL = Config(
     num_heads=16,
     head_dim=64,
     mlp_dim=4096,
+    xattn_qk_norm=False,
+    xattn_scaled_cosine=True,
+    attn_qk_norm=False,
+    attn_scaled_cosine=True,
   )
 )
