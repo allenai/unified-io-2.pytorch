@@ -359,7 +359,7 @@ def dot_product_attention(query: torch.Tensor,
     # calculate attention matrix
     if depth_normalize:
       depth = query.shape[-1]
-      query.div_(depth ** -0.5)
+      query = query / np.sqrt(depth)
 
     # `attn_weights`: [batch, num_heads, q_length, kv_length]
     attn_weights = torch.einsum('bqhd,bkhd->bhqk', query, key)
