@@ -219,7 +219,7 @@ class VisionTransformer(nn.Module):
     x = self.embedding(x)
     x = torch.cat([_expand_token(self.class_embedding, B).to(x.dtype), x], dim=1)
 
-    mask = torch.cat([torch.ones([B, 1], dtype=torch.int32), mask], dim=1)
+    mask = torch.cat([torch.ones([B, 1], dtype=torch.int32, device=mask.device), mask], dim=1)
 
     x = self.add_pos_emb(x, pos_ids, patch_num)
 

@@ -8,9 +8,9 @@ from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 
 
-def get_1d_position_embedding(pos_emb_type, length, emb_dim, head_dim, is_token, modality_idx, dtype, prefix=''):
+def get_1d_position_embedding(pos_emb_type, length, emb_dim, head_dim, is_token, modality_idx, prefix=''):
   if pos_emb_type == "llama_rope":
-    positional_embedding = build_llama_rope_cache_1d(length, head_dim, dtype=dtype)
+    positional_embedding = build_llama_rope_cache_1d(length, head_dim)
   else:
     raise NotImplementedError(f"{pos_emb_type}: not supported")
   return positional_embedding
@@ -18,7 +18,7 @@ def get_1d_position_embedding(pos_emb_type, length, emb_dim, head_dim, is_token,
 
 def get_2d_position_embedding(
   pos_emb_type, input_size, patch_size,
-  emb_dim, head_dim, modality_idx, dtype, resolution=1, prefix='',
+  emb_dim, head_dim, modality_idx, resolution=1, prefix='',
 ):
   if isinstance(patch_size, int):
     patch_size = (patch_size, patch_size)
@@ -30,7 +30,7 @@ def get_2d_position_embedding(
   return positional_embedding
 
 
-def build_llama_rope_cache_1d(seq_len: int, n_elem: int, base: float=10000.0, dtype = torch.float32) -> torch.Tensor:
+def build_llama_rope_cache_1d(seq_len: int, n_elem: int, base: float=10000.0) -> torch.Tensor:
 
   theta = 1.0 / (base ** (torch.arange(0, n_elem, 2).to(torch.float32) / n_elem))
   # Create position indexes `[0, 1, ..., seq_len - 1]`
@@ -119,7 +119,7 @@ def apply_rotary(x, rope_cache):
   # [batch, length, num_heads, n x rotary_hsize, 2] where n: 1(d) or 2(d)
   xshaped = x.to(torch.float32).reshape(*x.shape[:-1], -1, 2)
   # [batch, length, 1, n x rotary_hsize, 2] where n: 1(d) or 2(d)
-  rope_cache = rope_cache.reshape(xshaped.shape[0], xshaped.shape[1], 1, xshaped.shape[3], 2)
+  rope_cache = rope_cache.reshape(xshaped.shape[0], xshaped.shape[1], 1, xshaped.shape[3], 2).to(torch.float32)
   # Apply rotary matrices to the input tensor.
   x_out2 = torch.stack(
     [
@@ -170,8 +170,8 @@ class Dropout(nn.Dropout):
       for dim in self.broadcast_dims:
         dropout_shape[dim] = 1
       keep = x.new_empty(dropout_shape).bernoulli_(keep_prob)
-      keep = keep.broadcast_to(x.shape)
-      multiplier = (keep / torch.tensor(keep_prob, dtype=x.dtype))
+      multiplier = keep.broadcast_to(x.shape)
+      multiplier.div_(keep_prob)
       x = x * multiplier
     return x
 
@@ -269,8 +269,8 @@ def make_attention_mask(query_input: torch.Tensor,
   """
   # [batch, len_q, len_kv]
   mask = pairwise_fn(
-     query_input.unsqueeze(-1),
-     key_input.unsqueeze(-2),
+    query_input.unsqueeze(-1),
+    key_input.unsqueeze(-2),
   )
 
   # [batch, 1, len_q, len_kv]. This creates the head dim.
@@ -359,7 +359,7 @@ def dot_product_attention(query: torch.Tensor,
     # calculate attention matrix
     if depth_normalize:
       depth = query.shape[-1]
-      query = query / torch.sqrt(torch.tensor(depth, dtype=torch.int32)).to(query.dtype)
+      query.div_(depth ** -0.5)
 
     # `attn_weights`: [batch, num_heads, q_length, kv_length]
     attn_weights = torch.einsum('bqhd,bkhd->bhqk', query, key)
@@ -489,8 +489,7 @@ class MultiHeadDotProductAttention(nn.Module):
       k_sinusoids: Optional[torch.Tensor] = None,
       attn_pattern_mask: Optional[torch.Tensor] = None,
       *,
-      decode: bool = False,
-      deterministic: bool = False) -> torch.Tensor:
+      decode: bool = False) -> torch.Tensor:
     """Applies multi-head dot product attention on the input data.
 
     Projects the inputs into multi-headed query, key, and value vectors,
@@ -506,7 +505,6 @@ class MultiHeadDotProductAttention(nn.Module):
       k_sinusoids: sinusoidal values for the block diagonal matrix of key RoPE.
         `[batch, kv_length, 2 (cos then sin) * rotary_hsize <= size_per_head]` where n: 1(d) or 2(d).
       decode: Whether to prepare and use an autoregressive cache.
-      deterministic: Disables dropout if set to True.
 
     Returns:
       output of shape `[batch, length, q_features]`.
