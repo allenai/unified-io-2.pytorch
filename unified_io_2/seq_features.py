@@ -36,20 +36,6 @@ class TargetSequence:
   loss_mask: Optional[torch.Tensor] = None
   """Mask of tokens to use when computing the loss"""
 
-#   @staticmethod
-#   def empty(batch, trm_len, seq_len, n_heads, dtype, modality_id, embed_dim, mask_dtype=jnp.int32):
-#     return TargetSequence(
-#       jnp.zeros((batch, trm_len, embed_dim), jnp.float32),
-#       jnp.zeros((1, trm_len, embed_dim), jnp.float32),
-#       jnp.array(modality_id, dtype=jnp.int32),
-#       jnp.zeros((batch, trm_len), mask_dtype),
-#       jnp.zeros((1, trm_len, embed_dim), dtype),
-#       jnp.zeros((1, n_heads, trm_len, trm_len), dtype),
-#       jnp.zeros((batch, seq_len), jnp.int32),
-#       loss_mask=jnp.zeros((batch, seq_len), mask_dtype),
-#       subsegments=None
-#     )
-
   @property
   def seq_len(self):
     return self.input_embedding.shape[1]
@@ -59,9 +45,6 @@ class TargetSequence:
     return self.input_embedding.shape[0]
 
   def __post_init__(self):
-    # if all(x is None or isinstance(x, str) for x in dataclasses.asdict(self).values()):
-    #   # jax might build this sequence with strings to display an error message
-    #   return
     bs, seq_len = self.input_embedding.shape[:2]
 
     if self.position_id is not None:
@@ -80,7 +63,6 @@ class TargetSequence:
 
     if self.attn_pattern_mask is not None:
       assert self.attn_pattern_mask.shape[0] in [1, bs]
-      # assert jnp.issubdtype(self.attn_pattern_mask.dtype, jnp.floating)
 
     if self.subsegments is not None:
       assert self.subsegments.shape == (bs, seq_len)
@@ -104,6 +86,7 @@ class TargetSequence:
     return all_subsegments
 
 
+@dataclass
 class InputSequence:
   """Input sequence we can encode with an Encoder"""
 
@@ -140,28 +123,19 @@ class InputSequence:
     )
 
   def __post_init__(self):
-    # if all(x is None or isinstance(x, str) for x in dataclasses.asdict(self).values()):
-    #   # jax might build this pytreenode with strings to display an error message
-    #   return
-    assert torch.issubdtype(self.embed.dtype, torch.floating)
     assert len(self.embed.shape) == 3
     bs, seq_len = self.embed.shape[:2]
 
     if self.position_embed is not None:
-      assert torch.issubdtype(self.position_embed.dtype, torch.floating)
       assert len(self.position_embed.shape) == 3
       assert self.position_embed.shape[:2] in [(bs, seq_len), (1, seq_len)]
     if self.mask is not None:
-      assert self.mask.dtype == torch.int32 or self.mask.dtype == torch.bool_
       assert self.mask.shape == (bs, seq_len)
     if self.attn_pattern_mask is not None:
-      # assert jnp.issubdtype(self.attn_pattern_mask.dtype, jnp.floating)
       assert len(self.attn_pattern_mask.shape) == 4
-      # dim 1 is the number of heads
       assert self.attn_pattern_mask.shape[0] == bs
       assert self.attn_pattern_mask.shape[2:] == (seq_len, seq_len)
     if self.segment_ids is not None:
-      assert self.segment_ids.dtype == torch.int32
       assert self.segment_ids.shape == (bs, seq_len)
 
 
