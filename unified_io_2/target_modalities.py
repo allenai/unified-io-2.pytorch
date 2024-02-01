@@ -19,24 +19,43 @@ TEXT_MODALITY_INDEX = 0
 IMAGE_MODALITY_INDEX = 1
 AUDIO_MODALITY_INDEX = 2
 
+
 class TextEmbedder(nn.Module):
-  def __init__(self, config, embedding_layer):
+  def __init__(self, config):
     super().__init__()
     self.config = config
-    self.embedding_layer = embedding_layer
 
     cfg = self.config
     self.pos_emb_cache = layers.get_1d_position_embedding(
-      cfg.text_pos_emb, cfg.decoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1, cfg.dtype)
+      cfg.text_pos_emb, cfg.decoder_max_text_length,
+      cfg.emb_dim, cfg.head_dim, True, 1, cfg.dtype)
+    self.modality_embedding = nn.Parameter(torch.zeros((cfg.emb_dim,), dtype=torch.float32))
     
-  def decode(self, tokens, mask):
-    return tokens
+  def forward(self, inputs, shared_embed, mask=None, pos_ids=None, segment_ids=None, targets=None):
+    cfg = self.config
+    bs = inputs.shape[0]
+    if mask is None:
+      mask = (inputs > 0).to(torch.int32)
+    if pos_ids is None:
+      pos_ids = torch.arange(inputs.shape[1], dtype=torch.int32)[None, ...]
 
-  def __call__(self, inputs, mask=None, pos_ids=None, segment_ids=None, 
-              targets=None, init=False, decode=False, decode_length=None, 
-              cur_index=None):
+    x = shared_embed(inputs)
 
-    pass
+    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs)[:, None], pos_ids]
+
+    if "rope" not in cfg.text_pos_emb:
+      x += pos_emb
+
+    if "llama_rope" in cfg.text_pos_emb:
+      x += self.modality_embedding[None, None, :].to(cfg.dtype)
+
+    attn_pattern_mask = torch.ones(
+      (bs, 4, x.shape[1], x.shape[1]), dtype=cfg.dtype, device=x.device)
+    modality_id = torch.full((), TEXT_MODALITY_INDEX, device=x.device, dtype=torch.int32)
+    return TargetSequence(
+      x, pos_emb, modality_id, mask, attn_pattern_mask=attn_pattern_mask,
+      subsegments=segment_ids, target_tokens=targets, loss_mask=mask
+    )
 
 
 class BasicDecoder(nn.Module):
@@ -120,8 +139,8 @@ class TargetTextEncoder(ModalityEncoder):
     return features
 
 
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
-    return TextEmbedder(config, shared_embedding)
+  def get_encoder(self, config: T5Config) -> nn.Module:
+    return TextEmbedder(config)
 
   def get_decoder(self, config: Config, shared_embedding) -> nn.Module:
     return BasicDecoder(config.vocab_size, config, shared_embedding)
@@ -202,8 +221,8 @@ class TargetImageDVAEEmbedder(ModalityEncoder):
     features["image"] = tf.ensure_shape(features["image"], image_shape)
     return features
 
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
-    return ImageViTVQGAN(config, self.config, shared_embedding)
+  def get_encoder(self, config: T5Config) -> nn.Module:
+    return ImageViTVQGAN(config, self.config)
 
   def get_decoder(self, config: T5Config, shared_embedding) -> nn.Module:
     return BasicDecoder(config.image_vocab_size, config, shared_embedding)
@@ -241,8 +260,8 @@ class TargetAudioDVAEEmbedder(ModalityEncoder):
     super().__init__()    
     self.config = config
     
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
-    return ImageViTVQGAN(config, self.config, shared_embedding)
+  def get_encoder(self, config: T5Config) -> nn.Module:
+    return ImageViTVQGAN(config, self.config)
 
   def get_decoder(self, config: T5Config, shared_embedding) -> nn.Module:
     return BasicDecoder(config.image_vocab_size, config, shared_embedding)

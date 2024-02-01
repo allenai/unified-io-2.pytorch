@@ -2,6 +2,7 @@ import functools
 import operator
 import math
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -278,6 +279,40 @@ def make_attention_mask(query_input: torch.Tensor,
   dims = [1] * extra_batch_dims + list(mask.shape)
   mask = mask.view(*dims)
   return mask
+
+
+def make_decoder_mask(token_mask,
+                      decoder_segment_ids=None):
+  # Casual mask
+  idxs = torch.arange(token_mask.shape[1], dtype=torch.int32)
+  mask = idxs[None, :] <= idxs[:, None]
+  mask = mask[None, :, :]
+
+  # Padding mask
+  token_mask = token_mask > 0
+  mask = torch.logical_and(mask, token_mask[:, None, :])
+  mask = torch.logical_and(mask, token_mask[:, :, None,])
+
+  if decoder_segment_ids is not None:
+    # Segment mask
+    segment_mask = decoder_segment_ids[:, None, :] == decoder_segment_ids[:, :, None,]
+    mask = torch.logical_and(mask,  segment_mask)
+
+  mask = mask[None, :, :, :]  # head dim
+  return mask
+
+
+def make_causal_mask(seq_len):
+  idxs = torch.arange(seq_len, dtype=torch.int32)
+  mask = idxs[None, :] <= idxs[None, :]
+  return mask[None, None, :, :]
+
+
+def combine_masks(masks):
+  combined = masks[0]
+  for mask in masks[1:]:
+    combined = torch.logical_or(combined, mask)
+  return combined
 
 
 def combine_biases(*masks: Optional[torch.Tensor]):

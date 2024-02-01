@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence, Optional, List, Union
 
+import torch
 # import torch
 from typing_extensions import Self
 import math
@@ -96,14 +97,13 @@ def get_tokenizer(path):
   )
 
 
-
 @dataclass
 class T5Config:
   vocab_size: int = 33280
-  image_vocab_size: int = 16384 + 2 # add 1 is for the starting token.
+  image_vocab_size: int = 16512
   image_patch_size: int = 16
   image_vit_patch_size: int = 16
-  audio_vocab_size: int = 8192 + 2 # add 1 is for the starting token.
+  audio_vocab_size: int = 8320
   audio_patch_size: int = 16
   audio_vit_patch_size: int = 16
   
@@ -111,7 +111,7 @@ class T5Config:
   audio_raw_emb_dim: int = 0
   
   # Activation dtypes.
-  dtype: Any = 'float32'
+  dtype: Any = torch.float32
   emb_dim: int = 512
   num_heads: int = 8
   num_encoder_layers: int = 6

@@ -4,10 +4,12 @@ from typing import Any, Optional, Tuple, List
 
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 
 from unified_io_2.config import Config, T5Config
 from unified_io_2 import modality_processing, seq_features, layers
 from unified_io_2.seq_features import InputSequence
+from unified_io_2.utils import unflatten_dict
 
 
 class EncoderLayer(nn.Module):
@@ -104,7 +106,6 @@ class DecoderLayer(nn.Module):
                encoded,
                decoder_mask=None,
                encoder_decoder_mask=None,
-               deterministic=False,
                decoder_bias=None,
                cross_abs_pos_bias=None,
                decoder_sinusoids=None,
@@ -122,7 +123,6 @@ class DecoderLayer(nn.Module):
       decoder_bias,
       q_sinusoids=decoder_sinusoids,
       k_sinusoids=decoder_sinusoids,
-      deterministic=deterministic,
       attn_pattern_mask=attn_pattern_mask
     )
 
@@ -140,8 +140,7 @@ class DecoderLayer(nn.Module):
         encoder_decoder_mask,
         cross_abs_pos_bias,
         q_sinusoids=decoder_sinusoids,
-        k_sinusoids=encoder_sinusoids,
-        deterministic=deterministic)
+        k_sinusoids=encoder_sinusoids)
 
       y = self.drop(y)
 
@@ -231,90 +230,91 @@ class Decoder(nn.Module):
     return y
 
 
-
 class UnifiedIO(nn.Module):
   """An encoder-decoder Transformer model."""
   def __init__(self, t5_config, input_encoders, target_encoders) -> None:
     super().__init__()
-    self.t5_config = t5_config
+    self.config = t5_config
     self.input_encoders = input_encoders
     self.target_encoders = target_encoders
 
     cfg = t5_config
-    # self.text_token_embedder = nn.Embedding(
-    #     num_embeddings=cfg.vocab_size,
-    #     embedding_dim=cfg.emb_dim)
-    #
-    # self.image_token_embedder = nn.Embedding(
-    #     num_embeddings=cfg.vocab_size,
-    #     embedding_dim=cfg.emb_dim)
-    #
-    # self.audio_token_embedder = nn.Embedding(
-    #     num_embeddings=cfg.vocab_size,
-    #     embedding_dim=cfg.emb_dim)
 
-    self.encoder = Encoder()
+    self.text_token_embedder = nn.Embedding(
+      num_embeddings=cfg.vocab_size,
+      embedding_dim=cfg.emb_dim)
 
-    input_shared_embedding = {
-      'text': self.text_token_embedder,
-    }
+    self.image_token_embedder = nn.Embedding(
+        num_embeddings=cfg.image_vocab_size,
+        embedding_dim=cfg.emb_dim)
 
-    target_shared_embedding = {
+    self.audio_token_embedder = nn.Embedding(
+        num_embeddings=cfg.audio_vocab_size,
+        embedding_dim=cfg.emb_dim)
+
+    self.shared_embedding = {
       'text': self.text_token_embedder,
       'image': self.image_token_embedder,
       'audio': self.audio_token_embedder,
     }
 
-    # For encoding the inputs
-    # self.input_embedders = {k: v.get_encoder(cfg, input_shared_embedding.get(k, None))
-    #                         for k, v in self.input_encoders.items()}
-    #
-    # self.target_embedders = {k: v.get_encoder(cfg, target_shared_embedding.get(k, None))
-    #                          for k, v in self.target_encoders.items()}
-    #
-    # self.target_decoders = {k: v.get_decoder(cfg, target_shared_embedding.get(k, None))
-    #                         for k, v in self.target_encoders.items()}
+    # Encode input modalities
+    self.input_embedders = nn.ModuleDict(
+      {k: v.get_encoder(cfg)
+       for k, v in self.input_encoders.items()})
+
+    # Encode target modalities
+    self.target_embedders = nn.ModuleDict(
+      {k: v.get_encoder(cfg)
+       for k, v in self.target_encoders.items()})
+
+    self.encoder = Encoder(cfg)
+    self.decoder = Decoder(cfg)
 
   def forward(self, batch, horizontally_pack_inputs=None, horizontally_pack_targets=False) -> torch.Tensor:
     cfg = self.config
-    features = traverse_util.unflatten_dict(batch, sep="/")
+    features = unflatten_dict(batch, sep="/")
     input_features = features["inputs"]
     input_parts: List[InputSequence] = []
-    for k, v in self.input_encoders.items():
-      input_parts.append(v(**input_features[k]))
+    for k, v in self.input_embedders.items():
+      input_parts.append(v(**input_features[k], shared_embed=self.shared_embedding.get(k)))
 
     input_parts_to_pack = input_parts
     if horizontally_pack_inputs:
       input_seq = seq_features.pack_horizontally(input_parts_to_pack, horizontally_pack_inputs)
     else:
       input_seq = seq_features.concat_sequences(input_parts_to_pack)
-    n_packed_input_tokens = input_seq.mask.sum(-1)
 
     embed = self.encoder(input_seq)
 
     target_parts = []
     target_features = features["targets"]
-    for k, v in self.target_encoders.items():
+    for k, v in self.target_embedders.items():
       if target_features.get(k) is not None:
-        target_parts.append(v(**target_features[k]))
+        target_parts.append(v(**target_features[k], shared_embed=self.shared_embedding.get(k)))
+
+    target_tokens = [k.target_tokens for k in target_parts]
+    loss_masks = [k.loss_mask for k in target_parts]
+    for part in target_parts:
+      part.loss_mask = None
+      part.target_tokens = None
 
     if horizontally_pack_targets:
       target_seq = seq_features.pack_horizontally(target_parts, horizontally_pack_targets)
     else:
       target_seq = seq_features.concat_sequences(target_parts)
 
-    # Build the decoder masks TODO move into the decoder?
-    encoder_decoder_mask = layers.make_attention_mask(target_seq.mask, input_seq.mask, dtype=cfg.dtype)
+    encoder_decoder_mask = layers.make_attention_mask(
+      target_seq.mask, input_seq.mask).to(cfg.dtype)
     all_subsegments = target_seq.get_all_subsegments()
 
     decoder_attn_mask = layers.make_decoder_mask(
-      decoder_target_tokens=target_seq.mask,
-      dtype=cfg.dtype,
-      decoder_segment_ids=all_subsegments)
+      target_seq.mask, decoder_segment_ids=all_subsegments)
 
     if target_seq.segment_ids is not None:
-      cross_seg_mask = jnp.expand_dims(target_seq.segment_ids, -1) == jnp.expand_dims(input_seq.segment_ids, -2)
-      encoder_decoder_mask = encoder_decoder_mask * jnp.expand_dims(cross_seg_mask, 1)
+      cross_seg_mask = torch.unsqueeze(target_seq.segment_ids, -1) == \
+                       torch.unsqueeze(input_seq.segment_ids, -2)
+      encoder_decoder_mask = encoder_decoder_mask * torch.unsqueeze(cross_seg_mask, 1)
 
     # Do the decoding and output the feature vector for transformers.
     hidden_state = self.decoder(
@@ -327,5 +327,21 @@ class UnifiedIO(nn.Module):
       decoder_bias=None,
       attn_pattern_mask=target_seq.attn_pattern_mask,
     )
-    return hidden_state
+
+    if horizontally_pack_targets:
+      embedding_parts = seq_features.split_and_unpack(
+        hidden_state, [x.mask for x in target_parts])
+    else:
+      embedding_parts = torch.split(
+        hidden_state, [x.seq_len for x in target_parts], dim=1)
+
+    logits = {}
+    for name, state, targets, mask in zip(
+        self.target_embedders, embedding_parts, target_tokens, loss_masks):
+      embed = self.shared_embedding[name]
+      modality_logits = F.linear(state, embed.weight)
+      modality_logits = modality_logits / math.sqrt(state.shape[-1])
+      logits[name] = (modality_logits, targets, mask)
+
+    return logits
 

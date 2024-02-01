@@ -1,7 +1,8 @@
-
-from typing import Optional, List, Union, Tuple, TypeVar, Sequence, Iterable
+import dataclasses
+from typing import Optional, List
 from dataclasses import dataclass, field
-
+from torch.nn import functional as F
+import numpy as np
 import torch
 
 
@@ -96,9 +97,6 @@ class InputSequence:
   mask: Optional[torch.Tensor]
   """Mask over valid time steps"""
 
-  attn_pattern_mask: Optional[torch.Tensor]=None
-  """[batch, n_heads, seq_len, seq_en] relative attention bias"""
-
   segment_ids: Optional[torch.Tensor]=None
   """If packed, an example id for each token"""
 
@@ -118,7 +116,6 @@ class InputSequence:
     return InputSequence(
       torch.zeros((bs, seq_len, cfg.emb_dim), dtype=cfg.dtype),
       torch.zeros((bs, seq_len), dtype=torch.int32),
-      attn_pattern_mask=None,
       position_embed=torch.zeros((bs, seq_len, cfg.emb_dim), dtype=cfg.dtype),
     )
 
@@ -131,12 +128,74 @@ class InputSequence:
       assert self.position_embed.shape[:2] in [(bs, seq_len), (1, seq_len)]
     if self.mask is not None:
       assert self.mask.shape == (bs, seq_len)
-    if self.attn_pattern_mask is not None:
-      assert len(self.attn_pattern_mask.shape) == 4
-      assert self.attn_pattern_mask.shape[0] == bs
-      assert self.attn_pattern_mask.shape[2:] == (seq_len, seq_len)
     if self.segment_ids is not None:
       assert self.segment_ids.shape == (bs, seq_len)
 
 
-SequenceFeature = TypeVar("SequenceFeature", TargetSequence, InputSequence)
+def expand_scalar(val, seq_len):
+  if val is None:
+    return None
+  elif len(val.shape) <= 1:
+    val = torch.reshape(val, (1, 1))
+    return torch.tile(val, [1, seq_len])
+  else:
+    return val
+
+
+def seq_seq_concat(args):
+  total_len = sum(x.shape[-1] for x in args)
+  on = 0
+  out_list = []
+  for args in args:
+    n = args.shape[-1]
+    out_list.append(F.pad(args, [0, 0, on, total_len-on-n]))
+    on += n
+  return torch.concatenate(out_list, -1)
+
+
+def concat_sequences(seqs: List, seq_lens: Optional[List[int]]=None):
+  """Concats along the sequence dimension (i.e., horizontally)"""
+  out = {}
+  for k in dataclasses.fields(seqs[0]):
+    k = k.name
+    args = [expand_scalar(getattr(seq, k), seq.seq_len) for seq in seqs]
+
+    if all(x is None for x in args):
+      out[k] = None
+      continue
+
+    max_bs = max(x.shape[0] for x in args if x is not None)
+    full_sized = [x for x in args if (x is not None and x.shape[0] == max_bs)]
+    shape = list(full_sized[0].shape)
+
+    if len(full_sized) != len(args):
+      # Replace scalar/None values with blank/full values
+      padded_args = []
+      for ix, x in enumerate(args):
+        if x is not None and x.shape[0] == max_bs:
+          padded_args.append(x)  # Full sized
+
+        elif x is not None and x.shape[0] != max_bs:
+          assert x.shape[0] == 1  # broadcasts the batch dim, tile to max_bs
+          padded_args.append(torch.tile(x, [max_bs] + [1]*(len(x.shape)-1)))
+
+        else:
+          assert x is None  # replace with zero array of the correct shape
+          arg_shape = list(shape)
+          arg_shape[0] = max_bs
+          if len(shape) <= 3:
+            arg_shape[1] = seq_lens[ix]
+          elif len(shape) == 4:
+            arg_shape = arg_shape[:2] + [seq_lens[ix], seq_lens[ix]]
+
+          padded_args.append(torch.zeros(arg_shape, full_sized[0].dtype))
+      args = padded_args
+    if len(shape) == 4:
+      out[k] = seq_seq_concat(args)
+    else:
+      out[k] = torch.concat(args)
+
+  if isinstance(seqs[0], InputSequence):
+    return InputSequence(**out)
+  else:
+    return TargetSequence(**out)

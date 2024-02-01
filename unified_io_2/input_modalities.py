@@ -42,7 +42,7 @@ class ModalityEncoder:
     """
     raise NotImplementedError(self.__class__)
 
-  def get_encoder(self, config: Config, shared_embedding) -> nn.Module:
+  def get_encoder(self, config: Config) -> nn.Module:
     """
     Args:
       config:
@@ -60,42 +60,36 @@ class ModalityEncoder:
 
 # Text Modalities
 class InputTextEmbedder(nn.Module):
-  def __init__(self, config: T5Config, shared_embedding: nn.Module) -> None:
+  def __init__(self, config: T5Config) -> None:
     super().__init__()
     self.config = config
     cfg = config
-    
     self.pos_emb_cache = layers.get_1d_position_embedding(
-      cfg.text_pos_emb, cfg.encoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1, cfg.dtype)
-    
-  def __call__(self, tokens, mask, pos_ids, init=False, *,
-               enable_dropout=True, use_constraints=True):
+      cfg.text_pos_emb, cfg.encoder_max_text_length, cfg.emb_dim,
+      cfg.head_dim, True, 1, cfg.dtype)
+    self.modality_embedding = nn.Parameter(torch.zeros((cfg.emb_dim,), dtype=torch.float32))
+
+  def forward(self, tokens, shared_embed, mask=None, pos_ids=None):
 
     cfg = self.config
     bs, seq_len = tokens.shape
 
     if mask is None:
-      mask = (tokens > 0).astype(jnp.int32)
+      mask = (tokens > 0).to(torch.int)
     if pos_ids is None:
-      pos_ids = jnp.arange(seq_len, dtype=jnp.int32)
-      pos_ids = jnp.expand_dims(pos_ids, axis=0)
-      pos_ids = jnp.tile(pos_ids, [bs, 1])
+      pos_ids = torch.arange(seq_len, dtype=torch.int32)
+      pos_ids = torch.unsqueeze(pos_ids, dim=0)
+      pos_ids = torch.tile(pos_ids, [bs, 1])
 
-    x = self.shared_embedding(tokens.astype('int32'))
+    x = shared_embed(tokens.to(torch.int32))
 
-    pos_emb = self.pos_emb_cache[None,:,:][jnp.arange(bs)[:, None], pos_ids]    
+    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs)[:, None], pos_ids]
 
     if "rope" not in cfg.text_pos_emb:   
       x += pos_emb      
 
     if "llama_rope" in cfg.text_pos_emb:
-      modality_emb = param_with_axes(
-        "modality_embedding",
-        nn.initializers.normal(stddev=0.02),
-        (cfg.emb_dim,),
-        axes=(('embed',)),
-      )
-      x += modality_emb[None, None, :].astype(cfg.dtype)
+      x += self.modality_embedding[None, None, :].to(cfg.dtype)
 
     return InputSequence(embed=x, mask=mask, position_embed=pos_emb)
 
@@ -128,8 +122,8 @@ class InputTextEncoder(ModalityEncoder):
       "mask": tf.cast(inputs != config.PAD_ID, tf.int32),
     }
 
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
-    return InputTextEmbedder(config, shared_embedding)
+  def get_encoder(self, config: T5Config) -> nn.Module:
+    return InputTextEmbedder(config)
 
 
 class ViTImageEmbedder(nn.Module):
@@ -221,7 +215,7 @@ class InputImageViTEncoder(ModalityEncoder):
     self.image_encoder = image_encoder
     self.use_vit = use_vit
     
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
+  def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTImageEmbedder(self.image_encoder, config, "image", self.use_vit)
 
   def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
@@ -371,7 +365,7 @@ class InputImageHistoryViTEncoder(ModalityEncoder):
     self.resampler_config = resampler_config
     self.max_images_per_batch = max_images_per_batch
     
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
+  def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTHistoryEmbedder(
       self.image_encoder, self.resampler_config, config, "image", self.max_images_per_batch)
 
@@ -477,7 +471,7 @@ class InputAudioViTEncoder(ModalityEncoder):
     self.audio_encoder = audio_encoder
     self.use_vit = use_vit
     
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
+  def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTImageEmbedder(self.audio_encoder, config, "audio", self.use_vit)
 
   def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
@@ -582,7 +576,7 @@ class InputAudioHistoryViTEncoder(ModalityEncoder):
     self.resampler_config = resampler_config
     self.max_images_per_batch = max_images_per_batch
 
-  def get_encoder(self, config: T5Config, shared_embedding) -> nn.Module:
+  def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTHistoryEmbedder(
       self.audio_encoder, self.resampler_config, config, "audio", self.max_images_per_batch)
 

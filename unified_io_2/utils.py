@@ -40,7 +40,7 @@ def unflatten_dict(d, sep='/'):
           k_out[key] = {}
       k_out = k_out[key]
     k_out[parts[-1]] = v
-    return k_out
+  return out
 
 
 def get_default_supported_precision(training: bool) -> str:
