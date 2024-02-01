@@ -451,3 +451,9 @@ XXL = Config(
     attn_scaled_cosine=True,
   )
 )
+
+CONFIG_MAP = dict(
+  large=LARGE,
+  xl=XL,
+  xxl=XXL
+)

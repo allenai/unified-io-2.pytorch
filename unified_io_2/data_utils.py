@@ -12,6 +12,7 @@ import logging
 from unified_io_2 import config
 
 
+
 def apply_with_random_selector(x, func, num_cases):
   """Computes func(x, sel), with sel sampled from [0...num_cases-1].
   Args:
@@ -234,7 +235,7 @@ def resize_and_pad(image, desired_output_size, target_image=None, boxes=None, bo
                    shrink_both_sides=True, filter_box=True,
                    desired_target_size=None, random_scale_ratio=0.0,
                    resize_method=tf.image.ResizeMethod.BILINEAR,
-                   pad_value=0):
+                   pad_value=0, boxes_normalized=False):
   """Resizes and pads an input image/video to `desired_output_size`
 
   Support random scaling augmentation if `do_random_scale` is True
@@ -261,7 +262,7 @@ def resize_and_pad(image, desired_output_size, target_image=None, boxes=None, bo
     height = tf.cast(tf.shape(image)[0], tf.float32)
     width = tf.cast(tf.shape(image)[1], tf.float32)
 
-  if boxes is not None:
+  if boxes is not None and boxes_normalized:
     # Converts boxes from normalized coordinates to pixel coordinates.
     # Now the coordinates of boxes are w.r.t. the original image.
     boxes = denormalize_boxes(boxes, [height, width])
@@ -324,7 +325,6 @@ def resize_and_pad(image, desired_output_size, target_image=None, boxes=None, bo
   elif resize_method != 'random':
     image = tf.image.resize(image, [scaled_height, scaled_width], method=resize_method, antialias=True)
   else:
-    logging.info(f"you passed in {resize_method} but doing bilinear resize instead (possibly because eager is on or evaluation is on.)")
     image = tf.image.resize(image, [scaled_height, scaled_width],
                             method=tf.image.ResizeMethod.BILINEAR, antialias=True)
 
@@ -452,6 +452,22 @@ def _shift_right_by_one(tensor: tf.Tensor, bos_id: int = 0) -> tf.Tensor:
   dim_expansion = [slice(None, None)] + [None] * (len(rolled.shape) - 1)
   mask = mask[dim_expansion]
   return rolled * mask + (1 - mask) * bos_id
+
+
+def values_to_tokens(vals, clss=None):
+  vals = tf.convert_to_tensor(vals)
+  num_bins = config.NUM_DETECTION_BIN
+  vocab_start = config.VOCAB_START
+  quantized_boxes = tf.cast(vals * (num_bins-1), tf.int32)
+
+  # For values that were exactly one
+  vals = tf.constant([f'<extra_id_{i}>' for i in range(vocab_start, vocab_start+num_bins)])
+  tokens = tf.gather(vals, quantized_boxes)
+
+  if clss is not None:
+    tokens = tf.concat([tokens, tf.expand_dims(clss, 1)], axis=-1)
+
+  return tokens
 
 
 def make_autoregressive_inputs(
