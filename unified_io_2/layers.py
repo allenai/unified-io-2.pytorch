@@ -128,6 +128,7 @@ def apply_rotary(x, rope_cache):
     ],
     -1,
   )
+  x_out2 = torch.reshape(x_out2, x_out2.shape[:3] + (-1, ))
   return x_out2.to(x.dtype)
 
 
