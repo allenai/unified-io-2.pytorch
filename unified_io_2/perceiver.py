@@ -169,10 +169,10 @@ class PerceiverResampler(nn.Module):
     bs, seq_len, dim = embed.shape
         
     if mask is None:
-      mask = torch.ones([bs, seq_len], dtype=torch.int32)
+      mask = torch.ones([bs, seq_len], dtype=torch.int32, device=embed.device)
     
     embed = embed.reshape((bs, seq_len, dim))
-    query_mask = torch.ones([bs, self.config.latents_size], dtype=mask.dtype)
+    query_mask = torch.ones([bs, self.config.latents_size], dtype=mask.dtype, device=mask.device)
     key_mask = mask.reshape((bs, seq_len))
     latents = torch.unsqueeze(self.latents, axis=0)
     latents = latents.expand(bs, -1, -1).to(embed.dtype)
