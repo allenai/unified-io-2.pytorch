@@ -1,8 +1,10 @@
 from typing import Optional
+import functools
 
 import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops.image_ops_impl import _ImageDimensions, _CheckAtLeast3DImage, _assert, _is_tensor
+import numpy as np
 
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
@@ -519,6 +521,34 @@ def normalize_image(image,
   return image
 
 
+def normalize_video(video,**kwargs):
+  return tf.map_fn(
+      fn=functools.partial(
+        normalize_image,
+        **kwargs),
+      elems=video)
+
+
+def unnormalize_image(image,
+                    offset=(0.48145466, 0.4578275, 0.40821073),
+                    scale=(0.26862954, 0.26130258, 0.27577711)):
+  """Normalizes the image to zero mean and unit variance."""
+  scale = tf.cast(tf.expand_dims(tf.expand_dims(tf.constant(scale), axis=0), axis=0), image.dtype)
+  image *= scale
+
+  offset = tf.cast(tf.expand_dims(tf.expand_dims(tf.constant(offset), axis=0), axis=0), image.dtype)
+  image += offset
+  return image
+
+
+def unnormalize_video(video, **kwargs):
+  return tf.map_fn(
+    fn=functools.partial(
+      unnormalize_image,
+      **kwargs),
+    elems=video)
+
+
 def sample_patches(mask, n_patches):
   input_sample_valid = tf.boolean_mask(tf.range(tf.shape(mask)[0]), mask)
   input_sample_masked = tf.boolean_mask(tf.range(tf.shape(mask)[0]), mask == 0)
@@ -528,3 +558,47 @@ def sample_patches(mask, n_patches):
   encoder_pos_ids = tf.reshape(encoder_pos_ids, (n_patches,))
   encoder_pos_ids = tf.cast(encoder_pos_ids, tf.int32)
   return encoder_pos_ids
+
+
+def _init_mask(height, width, is_bool_mask=False):
+  attn_size = height * width
+  mask = np.tril(np.ones([attn_size, attn_size], np.bool if is_bool_mask else np.float32))
+  return mask
+
+
+def get_row_mask(height=32, width=32, is_bool_mask=False):
+  mask = _init_mask(height, width, is_bool_mask=is_bool_mask)
+  step = width + 1
+  for col in range(mask.shape[1]):
+      mask[col + step:, col] = False if is_bool_mask else 0.0
+  return mask  
+
+
+def get_col_mask(height=32, width=32, is_bool_mask=False):
+  mask = _init_mask(height, width, is_bool_mask=is_bool_mask)
+  step = width - 1
+  for col in range(mask.shape[1]):
+      for i in range(1, mask.shape[0], step+1):
+          mask[col + i: col + i + step, col] = False if is_bool_mask else 0.0
+  return mask
+
+
+def get_conv_mask(height=32, width=32, kernel=11, is_bool_mask=False, hf_version='v3'):
+    mask = _init_mask(height, width, is_bool_mask=is_bool_mask)
+    shift = kernel // 2
+    for pos in range(mask.shape[1]):
+        mask[pos+1:, pos] = False if is_bool_mask else 0.0
+        img = np.zeros([height, width])
+        pixel_id = pos
+        row = pixel_id // width
+        col = pixel_id % width
+        for r in range(-shift, shift+1):
+            for c in range(-shift, shift+1):
+                c_abs = max(min(c + col, width - 1), 0)
+                r_abs = max(min(r + row, height - 1), 0)
+                img[r_abs, c_abs] = 0.2
+                cell_id = r_abs * width + c_abs
+                if  cell_id > pos:
+                    mask[cell_id, pos] = True if is_bool_mask else 1.0
+        img[row, col] = 1.0
+    return mask

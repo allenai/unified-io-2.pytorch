@@ -6,7 +6,7 @@ import einops
 import torch
 import torch.nn as nn
 
-from unified_io_2.data_utils import normalize_image, sample_patches, trim_or_pad_tf_2d
+from unified_io_2.data_utils import normalize_image, normalize_video, sample_patches, trim_or_pad_tf_2d
 from unified_io_2.seq_features import InputSequence
 from unified_io_2.config import *
 from unified_io_2 import layers, config
@@ -60,14 +60,17 @@ class ModalityEncoder:
 
 # Text Modalities
 class InputTextEmbedder(nn.Module):
-  def __init__(self, config: T5Config) -> None:
+  def __init__(self, config: T5Config, param_dict=None) -> None:
     super().__init__()
     self.config = config
     cfg = config
-    self.pos_emb_cache = layers.get_1d_position_embedding(
-      cfg.text_pos_emb, cfg.encoder_max_text_length, cfg.emb_dim,
-      cfg.head_dim, True, 1, cfg.dtype)
-    self.modality_embedding = nn.Parameter(torch.zeros((cfg.emb_dim,), dtype=torch.float32))
+
+    self.register_buffer('pos_emb_cache', layers.get_1d_position_embedding(
+      cfg.text_pos_emb, cfg.encoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1))
+    if "llama_rope" in cfg.text_pos_emb:
+      self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
+      if param_dict is not None:
+        self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
 
   def forward(self, tokens, shared_embed, mask=None, pos_ids=None):
 
@@ -75,27 +78,26 @@ class InputTextEmbedder(nn.Module):
     bs, seq_len = tokens.shape
 
     if mask is None:
-      mask = (tokens > 0).to(torch.int)
+      mask = (tokens > 0).to(torch.int32)
     if pos_ids is None:
-      pos_ids = torch.arange(seq_len, dtype=torch.int32)
-      pos_ids = torch.unsqueeze(pos_ids, dim=0)
-      pos_ids = torch.tile(pos_ids, [bs, 1])
+      pos_ids = torch.arange(seq_len, dtype=torch.int32, device=tokens.device)
+      pos_ids = torch.unsqueeze(pos_ids, 0).expand(bs, -1)
 
     x = shared_embed(tokens.to(torch.int32))
 
-    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs)[:, None], pos_ids]
-
-    if "rope" not in cfg.text_pos_emb:   
-      x += pos_emb      
+    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs, dtype=pos_ids.dtype, device=pos_ids.device)[:, None], pos_ids]
 
     if "llama_rope" in cfg.text_pos_emb:
-      x += self.modality_embedding[None, None, :].to(cfg.dtype)
+      x += self.modality_embedding[None, None, :].to(x.dtype)
 
     return InputSequence(embed=x, mask=mask, position_embed=pos_emb)
 
 
 class InputTextEncoder(ModalityEncoder):
   """Tokenize and embed input text"""
+  def __init__(self, param_dict=None):
+    super().__init__()
+    self.param_dict = param_dict
 
   def preprocess_inputs(self, features, vocab, sequence_length) -> Dict:
     if features.get(f"text_inputs") is None:
@@ -123,17 +125,19 @@ class InputTextEncoder(ModalityEncoder):
     }
 
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return InputTextEmbedder(config)
+    return InputTextEmbedder(config, param_dict=self.param_dict)
 
 
 class ViTImageEmbedder(nn.Module):
-  def __init__(self, image_encoder: nn.Module, t5_config: T5Config, modality: str, use_vit: bool = False) -> None:
+  def __init__(self, image_encoder: nn.Module, t5_config: T5Config, modality: str, use_vit: bool = False, freeze_vit: bool = True, param_dict=None) -> None:
     super().__init__()
-    self.config = t5_config
-    cfg = self.config
+    self.t5_config = t5_config
+    cfg = self.t5_config
     self.modality = modality
     self.use_vit = use_vit
-    
+    self.freeze_vit = freeze_vit
+
+    self.image_encoder = image_encoder
     self.modality_idx = 2 if "image" in self.modality else 3
     
     if self.use_vit:
@@ -148,75 +152,65 @@ class ViTImageEmbedder(nn.Module):
     self.raw_emb_dim = cfg.image_raw_emb_dim if "image" in self.modality else cfg.audio_raw_emb_dim
     pos_emb_type = cfg.image_pos_emb if "image" in self.modality else cfg.audio_pos_emb
 
+    nchannel = 3 if "image" in self.modality else 1
+    raw_input_dim = nchannel * patch_size * patch_size
+
+    in_dim = 2 * self.image_encoder.config.emb_dim if use_vit else raw_input_dim
+    self.projection = nn.Linear(in_dim, cfg.emb_dim, bias=False)
+    nn.init.trunc_normal_(self.projection.weight, std=math.sqrt(1 / in_dim), a=-2.0, b=2.0)
+
     scale = math.sqrt(cfg.decoder_max_image_length / cfg.encoder_max_image_length)
-    self.pos_emb_cache = layers.get_2d_position_embedding(
+    self.register_buffer('pos_emb_cache', layers.get_2d_position_embedding(
         pos_emb_type, 
         default_size, 
         patch_size, 
         cfg.emb_dim, 
         cfg.head_dim, 
         self.modality_idx, 
-        scale)
+        scale))
     
-  def __call__(self, input, pos_ids, mask, *, enable_dropout=True, use_constraints=True):
+    if "llama_rope" in pos_emb_type:
+      self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
+    
+    if param_dict is not None:
+      self.projection.weight.data.copy_(torch.from_numpy(param_dict['projection']['kernel']).transpose(0, 1))
+      self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
+    
+  def __call__(self, input, pos_ids, mask, *, use_constraints=True):
     cfg = self.t5_config
     bs = input.shape[0]
     pos_emb_type = cfg.image_pos_emb if "image" in self.modality else cfg.audio_pos_emb
     
     if self.use_vit:
       # get image feature from the encoder
-      x, x1 = self.image_encoder(input, mask, pos_ids, enable_dropout=enable_dropout, patch_num = self.patch_num)
-      x = jax.lax.stop_gradient(x)
-      x1 = jax.lax.stop_gradient(x1)
-      x = jnp.concatenate([x, x1], axis=-1)
+      x, x1 = self.image_encoder(input, mask, pos_ids, patch_num = self.patch_num)
+      if self.freeze_vit:
+        x = x.detach()
+        x1 = x1.detach()
+      x = torch.cat([x, x1], dim=-1)
     else:
       x = input
-
-    # if self.use_vit and self.raw_emb_dim != 0:
-    #   raw_emb = layers.DenseGeneral(
-    #     self.raw_emb_dim,
-    #     dtype=cfg.dtype,
-    #     kernel_axes=('image_patch', 'embed'),
-    #     name='raw_emb_projection',
-    #   )(input)
-
-    #   x = jnp.concatenate([x, raw_emb], axis=-1)      
     
     # projecting the features.
-    x = layers.DenseGeneral(
-      cfg.emb_dim,
-      dtype=cfg.dtype,
-      kernel_axes=('image_patch', 'embed'),
-      name='projection',
-    )(x)
+    x = self.projection(x)
 
-    pos_emb = self.pos_emb_cache[None,:,:][jnp.arange(bs)[:, None], pos_ids]
-
-    if "rope" not in pos_emb_type:
-      # sample pos embedding based on pos_ids
-      pos_emb = pos_emb[None,:,:][jnp.arange(bs)[:, None], pos_ids]
-      x += pos_emb
+    pos_emb = self.pos_emb_cache[None,:,:][torch.arange(bs, dtype=pos_ids.dtype, device=pos_ids.device)[:, None], pos_ids]
 
     if "llama_rope" in pos_emb_type:
-      modality_emb = param_with_axes(
-        "modality_embedding",
-        nn.initializers.normal(stddev=0.02),
-        (cfg.emb_dim,),
-        axes=(('embed',)),
-      )
-
-      x += modality_emb[None, None, :].astype(cfg.dtype)
+      x += self.modality_embedding[None, None, :].to(x.dtype)
 
     return InputSequence(x, mask, position_embed = pos_emb)
 
 class InputImageViTEncoder(ModalityEncoder):
-  def __init__(self, image_encoder, use_vit = False) -> None:
+  def __init__(self, image_encoder, use_vit = False, freeze_vit = True, param_dict=None) -> None:
     super().__init__()
     self.image_encoder = image_encoder
     self.use_vit = use_vit
+    self.freeze_vit = freeze_vit
+    self.param_dict = param_dict
     
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return ViTImageEmbedder(self.image_encoder, config, "image", self.use_vit)
+    return ViTImageEmbedder(self.image_encoder, config, "image", self.use_vit, self.freeze_vit, param_dict=self.param_dict)
 
   def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
     image_input_size = IMAGE_INPUT_SIZE
@@ -325,7 +319,9 @@ class InputImageViTEncoder(ModalityEncoder):
 
 class ViTHistoryEmbedder(nn.Module):
   """Embeds image or audio history using an encoder and then a perciever"""
-  def __init__(self, vit_image_encoder, resampler_config, config, modality, max_images_per_example) -> None:
+  def __init__(
+      self, vit_image_encoder, resampler_config: Union[ImageResamplerConfig, AudioResamplerConfig], config: T5Config, modality, max_images_per_example, param_dict=None
+  ) -> None:
     super().__init__()
     self.vit_image_encoder = vit_image_encoder
     self.resampler_config = resampler_config
@@ -334,7 +330,7 @@ class ViTHistoryEmbedder(nn.Module):
     self.max_images_per_example = max_images_per_example
   
     cfg = self.config
-    self.resampler = Resampler(self.resampler_config)
+    self.resampler = Resampler(self.resampler_config, param_dict=param_dict['resampler']['PerceiverResampler_0'])
     self.modality_idx = 4 if "image" in self.modality else 5
 
     if self.vit_image_encoder is not None:
@@ -347,27 +343,106 @@ class ViTHistoryEmbedder(nn.Module):
     self.patch_num = [i // patch_size for i in default_size]
 
     pos_emb_type = cfg.image_history_pos_emb if "image" in self.modality else cfg.audio_history_pos_emb
+
+    nchannel = 3 if "image" in self.modality else 1
+    raw_input_dim = nchannel * patch_size * patch_size
+
+    in_dim = vit_image_encoder.config.emb_dim if vit_image_encoder is not None else raw_input_dim
+    self.pre_projection = nn.Linear(in_dim, self.resampler_config.emb_dim, bias=False)
+    nn.init.trunc_normal_(self.pre_projection.weight, std=math.sqrt(1 / in_dim), a=-2.0, b=2.0)
+    self.post_projection = nn.Linear(self.resampler_config.emb_dim, cfg.emb_dim, bias=False)
+    nn.init.trunc_normal_(self.post_projection.weight, std=math.sqrt(1 / self.resampler_config.emb_dim), a=-2.0, b=2.0)
  
-    self.pos_emb_cache = layers.get_2d_position_embedding(
+    self.register_buffer('pos_emb_cache', layers.get_2d_position_embedding(
       pos_emb_type, (self.resampler_config.max_frames, self.resampler_config.latents_size), 
-      (1, 1), cfg.emb_dim, cfg.head_dim, self.modality_idx, cfg.dtype)         
-    self.pos_emb_cache = self.pos_emb_cache.reshape(self.resampler_config.max_frames, self.resampler_config.latents_size, -1)
+      (1, 1), cfg.emb_dim, cfg.head_dim, self.modality_idx).reshape(
+        self.resampler_config.max_frames, self.resampler_config.latents_size, -1))
     self.raw_emb_dim = cfg.image_raw_emb_dim if "image" in self.modality else cfg.audio_raw_emb_dim
 
-  def __call__(self, input, pos_ids, mask, *, enable_dropout=True, use_constraints=True):
+    if "llama_rope" in pos_emb_type:
+      self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
+
+    if param_dict is not None:
+      self.pre_projection.weight.data.copy_(torch.from_numpy(param_dict['pre_projection']['kernel']).transpose(0, 1))
+      self.post_projection.weight.data.copy_(torch.from_numpy(param_dict['post_projection']['kernel']).transpose(0, 1))
+      self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
+
+  def __call__(self, input, pos_ids, mask, *, use_constraints=True):
     cfg = self.config
+
+    pos_emb_type = cfg.image_history_pos_emb if "image" in self.modality else cfg.audio_history_pos_emb
+
+    batch, frames, patch, pdim = input.shape
+    compressed_pos_ids = torch.reshape(pos_ids, [batch * frames, patch])
+    input = torch.reshape(input, [batch * frames, patch, pdim])
+    compressed_mask = torch.reshape(mask, [batch * frames, patch])
+
+    if self.max_images_per_example and use_constraints:
+      # Compress [batch*frames, ...] -> [self.max_images_per_batch, ...]
+      max_images_per_batch = int(round(self.max_images_per_example*batch))
+
+      # Build [max_images, batch*frames] compression matrix
+      valid_frames = torch.any(mask > 0, -1).to(torch.int32).flatten()
+      ixs = torch.cumsum(valid_frames, 0) - 1
+      mat = torch.unsqueeze(ixs, 0) == torch.unsqueeze(torch.arange(max_images_per_batch, dtype=ixs.dtype, device=ixs.device), 1)
+      mat = mat.to(torch.int32) * torch.reshape(valid_frames, [-1])
+                
+      # Do the compressing
+      input = torch.einsum("mb,bpd->mpd", mat.to(input.dtype), input)  # [max_images, patches, patch_dim]
+      compressed_mask = torch.einsum("mb,bp->mp", mat, compressed_mask)
+      compressed_pos_ids = torch.einsum("mb,bp->mp", mat, compressed_pos_ids)
+    
+    if self.vit_image_encoder is not None:
+      features, _ = self.vit_image_encoder(
+        input, compressed_mask, compressed_pos_ids, patch_num=self.patch_num,
+      )
+      features = features.detach()
+    else:
+      features = input
+    
+    features = self.pre_projection(features)
+
+    video_features = self.resampler(features, mask=compressed_mask)
+
+    video_features = self.post_projection(video_features)
+
+    if self.max_images_per_example and use_constraints:
+      # Decompress [self.max_images_per_batch, ...] -> [batch*frames, ...]
+      video_features = torch.einsum("mb,mpd->bpd", mat.to(video_features.dtype), video_features)
+      compressed_mask = torch.einsum("mb,md->bd", mat, compressed_mask)
+    
+    video_features = torch.reshape(video_features, [batch, frames] + list(video_features.shape[1:]))
+    compressed_mask = torch.reshape(compressed_mask, [batch, frames] + list(compressed_mask.shape[1:]))
+
+    video_mask = torch.any(compressed_mask > 0, -1, keepdim=True).expand(
+      -1, -1, self.resampler_config.latents_size).to(torch.int32)
+    
+    video_pos_emb = self.pos_emb_cache[:frames].reshape(-1, self.pos_emb_cache.shape[-1])
+    video_pos_emb = video_pos_emb[None, :, :].expand(batch, -1, -1)
+
+    if "llama_rope" in pos_emb_type:
+      video_features += self.modality_embedding[None, None, None, :].to(video_features.dtype)
+
+    latents_size = self.resampler_config.latents_size
+    
+    video_features = torch.reshape(video_features, (batch, frames*latents_size, video_features.shape[-1]))
+    video_mask = torch.reshape(video_mask, (batch, frames*latents_size))
+    video_pos_emb = torch.reshape(video_pos_emb, (batch, frames*latents_size, video_pos_emb.shape[-1]))
+    
+    return InputSequence(video_features, mask=video_mask, position_embed=video_pos_emb)
 
 
 class InputImageHistoryViTEncoder(ModalityEncoder):
-  def __init__(self, image_encoder, resampler_config, max_images_per_batch=None) -> None:
+  def __init__(self, image_encoder, resampler_config, max_images_per_batch=None, param_dict=None) -> None:
     super().__init__()
     self.image_encoder = image_encoder
     self.resampler_config = resampler_config
     self.max_images_per_batch = max_images_per_batch
+    self.param_dict = param_dict
     
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTHistoryEmbedder(
-      self.image_encoder, self.resampler_config, config, "image", self.max_images_per_batch)
+      self.image_encoder, self.resampler_config, config, "image", self.max_images_per_batch, param_dict=self.param_dict)
 
   def preprocess_inputs(
       self, features: Dict, output_features, sequence_length) -> Dict[str, tf.Tensor]:
@@ -395,7 +470,7 @@ class InputImageHistoryViTEncoder(ModalityEncoder):
       assert len(input.shape) == 3
       input = tf.ensure_shape(input, [n_frames, n_patches, n_pixels])
       input = tf.reshape(normalize_video(
-        tf.reshape(input, [n_frames * n_patches, -1, 3])), input.shape)
+        tf.reshape(input, [n_frames, -1, 1, 3])), input.shape)
       return {
         'input': input,
         'mask': input_masks,
@@ -466,13 +541,15 @@ class InputImageHistoryViTEncoder(ModalityEncoder):
 
 
 class InputAudioViTEncoder(ModalityEncoder):
-  def __init__(self, audio_encoder, use_vit = False) -> None:
+  def __init__(self, audio_encoder, use_vit = False, freeze_vit = True, param_dict=None) -> None:
     super().__init__()
     self.audio_encoder = audio_encoder
     self.use_vit = use_vit
+    self.freeze_vit = freeze_vit
+    self.param_dict = param_dict
     
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return ViTImageEmbedder(self.audio_encoder, config, "audio", self.use_vit)
+    return ViTImageEmbedder(self.audio_encoder, config, "audio", self.use_vit, self.freeze_vit, param_dict=self.param_dict)
 
   def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
     audio_input_size = AUDIO_INPUT_SIZE
@@ -570,15 +647,16 @@ class InputAudioViTEncoder(ModalityEncoder):
 
 
 class InputAudioHistoryViTEncoder(ModalityEncoder):
-  def __init__(self, audio_encoder, resampler_config, max_images_per_batch=None) -> None:
+  def __init__(self, audio_encoder, resampler_config, max_images_per_batch=None, param_dict=None) -> None:
     super().__init__()
     self.audio_encoder = audio_encoder
     self.resampler_config = resampler_config
     self.max_images_per_batch = max_images_per_batch
+    self.param_dict = param_dict
 
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTHistoryEmbedder(
-      self.audio_encoder, self.resampler_config, config, "audio", self.max_images_per_batch)
+      self.audio_encoder, self.resampler_config, config, "audio", self.max_images_per_batch, param_dict=self.param_dict)
 
   def preprocess_inputs(
       self, features: Dict, output_features, sequence_length) -> Dict[str, tf.Tensor]:

@@ -242,7 +242,7 @@ class ImageFeature(nn.Module):
   def __init__(self, config, param_dict=None) -> None:
     super().__init__()
     self.config = config
-    self.vision_transformer = VisionTransformer(config, param_dict)
+    self.vision_transformer = VisionTransformer(config, param_dict['vision_transformer'])
     
   def forward(self, x, mask, pos_ids, *, patch_num: Any = (16, 16)):
     x, x1 = self.vision_transformer(x, mask, pos_ids, patch_num=patch_num)
@@ -253,7 +253,7 @@ if __name__ == "__main__":
   print("Loading uio2-large-2M ckpt...")
   import numpy as np
   ckpt_file = "checkpoints/unified-io-2_large_instructional_tunning_2M.npz"
-  param_dict = np.load(ckpt_file, allow_pickle=True)['input_image_encoder'].item()['image_encoder']['vision_transformer']
+  param_dict = np.load(ckpt_file, allow_pickle=True)['input_image_encoder'].item()['image_encoder']
   print("Building and Initiazling pytorch vit...")
   vit_cfg = ImageVitFeatureConfig()
   image_encoder = ImageFeature(vit_cfg, param_dict)

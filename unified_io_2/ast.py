@@ -250,7 +250,7 @@ class AudioFeature(nn.Module):
   def __init__(self, config, param_dict=None) -> None:
     super().__init__()
     self.config = config
-    self.vision_transformer = VisionTransformer(config, param_dict)
+    self.vision_transformer = VisionTransformer(config, param_dict['vision_transformer'])
 
   def __call__(self, x, mask, pos_ids, *, patch_num: Any = (16, 8)):
     if self.config.transpose_input:
@@ -263,7 +263,7 @@ if __name__ == "__main__":
   print("Loading uio2-large-2M ckpt...")
   import numpy as np
   ckpt_file = "checkpoints/unified-io-2_large_instructional_tunning_2M.npz"
-  param_dict = np.load(ckpt_file, allow_pickle=True)['input_audio_encoder'].item()['image_encoder']['vision_transformer']
+  param_dict = np.load(ckpt_file, allow_pickle=True)['input_audio_encoder'].item()['image_encoder']
   print("Building and Initiazling pytorch ast...")
   ast_cfg = AudioVitFeatureConfig()
   audio_encoder = AudioFeature(ast_cfg, param_dict)

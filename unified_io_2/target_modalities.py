@@ -21,15 +21,17 @@ AUDIO_MODALITY_INDEX = 2
 
 
 class TextEmbedder(nn.Module):
-  def __init__(self, config):
+  def __init__(self, config, param_dict=None):
     super().__init__()
     self.config = config
 
     cfg = self.config
-    self.pos_emb_cache = layers.get_1d_position_embedding(
-      cfg.text_pos_emb, cfg.decoder_max_text_length,
-      cfg.emb_dim, cfg.head_dim, True, 1, cfg.dtype)
-    self.modality_embedding = nn.Parameter(torch.zeros((cfg.emb_dim,), dtype=torch.float32))
+    self.register_buffer("pos_emb_cache", layers.get_1d_position_embedding(
+      cfg.text_pos_emb, cfg.decoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1))
+    if "llama_rope" in cfg.text_pos_emb:
+      self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
+      if param_dict is not None:
+        self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
     
   def forward(self, inputs, shared_embed, mask=None, pos_ids=None, segment_ids=None, targets=None):
     cfg = self.config
@@ -37,20 +39,17 @@ class TextEmbedder(nn.Module):
     if mask is None:
       mask = (inputs > 0).to(torch.int32)
     if pos_ids is None:
-      pos_ids = torch.arange(inputs.shape[1], dtype=torch.int32)[None, ...]
+      pos_ids = torch.arange(inputs.shape[1], dtype=torch.int32, device=inputs.device)[None, ...]
 
     x = shared_embed(inputs)
 
-    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs)[:, None], pos_ids]
-
-    if "rope" not in cfg.text_pos_emb:
-      x += pos_emb
+    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs, dtype=pos_ids.dtype, device=pos_ids.device)[:, None], pos_ids]
 
     if "llama_rope" in cfg.text_pos_emb:
-      x += self.modality_embedding[None, None, :].to(cfg.dtype)
+      x += self.modality_embedding[None, None, :].to(x.dtype)
 
     attn_pattern_mask = torch.ones(
-      (bs, 4, x.shape[1], x.shape[1]), dtype=cfg.dtype, device=x.device)
+      (bs, 4, x.shape[1], x.shape[1]), dtype=x.dtype, device=x.device)
     modality_id = torch.full((), TEXT_MODALITY_INDEX, device=x.device, dtype=torch.int32)
     return TargetSequence(
       x, pos_emb, modality_id, mask, attn_pattern_mask=attn_pattern_mask,
@@ -60,31 +59,31 @@ class TextEmbedder(nn.Module):
 
 class BasicDecoder(nn.Module):
 
-  def __init__(self, vocab_size, config, embedding_layer):
+  def __init__(self, vocab_size, config):
     super().__init__()
     self.vocab_size = vocab_size
     self.config = config
-    self.embedding_layer = embedding_layer
 
-  def __call__(self, x, decode=False):
+    cfg = self.config
+    if not cfg.logits_via_embedding:
+      self.logits_dense = nn.Linear(cfg.emb_dim, self.vocab_size, bias=False)
+      nn.init.trunc_normal_(self.logits_dense.weight, std=math.sqrt(1 / cfg.emb_dim), a=-2.0, b=2.0)
+
+  def __call__(self, x, shared_embed):
     cfg = self.config
     if cfg.logits_via_embedding:
-      logits = self.embedding_layer.attend(x)
-      logits = logits / torch.sqrt(x.shape[-1])
+      logits = torch.matmul(x, shared_embed.weight.T)
+      logits = logits / np.sqrt(x.shape[-1])
     else:
-      logits = layers.DenseGeneral(
-          self.vocab_size,
-          dtype=jnp.float32,  # Use float32 for stabiliity.
-          kernel_axes=('embed', 'vocab'),
-          name='logits_dense')(
-              x)
+      logits = self.logits_dense(x)
     return logits
 
 
 class TargetTextEncoder(ModalityEncoder):
   """Tokenize and embed input text, handles multiple target texts"""
-  def __init__(self):
+  def __init__(self, param_dict=None):
     super().__init__()
+    self.param_dict = param_dict
 
   def preprocess_inputs(self, features, sequence_length) -> Dict:
     text_targets = features.get(f"text_targets")
@@ -128,7 +127,7 @@ class TargetTextEncoder(ModalityEncoder):
     features["targets"] = tokens
 
     features["inputs"] = make_autoregressive_inputs(
-      tokens, sequence_id=features.get("segment_ids"), bos_id=config.EOS_ID
+      tokens, sequence_id=features.get("segment_ids"), bos_id=config.BOS_ID
     )
 
     # remove the end token mask here, assume eos_id is larger than pad_id
@@ -140,10 +139,10 @@ class TargetTextEncoder(ModalityEncoder):
 
 
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return TextEmbedder(config)
+    return TextEmbedder(config, param_dict=self.param_dict)
 
-  def get_decoder(self, config: Config, shared_embedding) -> nn.Module:
-    return BasicDecoder(config.vocab_size, config, shared_embedding)
+  def get_decoder(self, config: Config) -> nn.Module:
+    return BasicDecoder(config.vocab_size, config)
 
 
 class TargetImageDVAEEmbedder(ModalityEncoder):
