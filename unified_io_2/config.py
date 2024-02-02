@@ -374,7 +374,7 @@ class Config:
   # Other configuration parts the same default for all model sizes, they don't need to be changed
   # unless experimenting with new models
   image_vae: VAEConfig=VAEConfig()
-  audio_vae: AudioViTVQGANConfig=AudioResamplerConfig()
+  audio_vae: AudioViTVQGANConfig=AudioViTVQGANConfig()
   image_vit_cfg: ImageVitFeatureConfig=ImageVitFeatureConfig()
   audio_vit_cfg: AudioVitFeatureConfig=AudioVitFeatureConfig()
   use_image_vit: bool = True

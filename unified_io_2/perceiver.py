@@ -150,13 +150,13 @@ class PerceiverResampler(nn.Module):
     self.context_norm = layers.RMSNorm(config.emb_dim)
     self.perceiver_norm = layers.RMSNorm(config.emb_dim)
 
-    dpr = [x for x in torch.linspace(0, config.droppath_rate, config.num_layers)]
+    dpr = [x.item() for x in torch.linspace(0, config.droppath_rate, config.num_layers)]
     for lyr in range(config.num_layers):
       layer_dict_i = None if param_dict is None else param_dict[f'layers_{lyr}']
       if lyr in config.xattention_index:
-        setattr(self, f'layers_{lyr}', CrossAttention(config, droppath_rate=dpr[lyr], param_dict=layer_dict_i))
+        self.add_module(f'layers_{lyr}', CrossAttention(config, droppath_rate=dpr[lyr], param_dict=layer_dict_i))
       else:
-        setattr(self, f'layers_{lyr}', Attention(config, droppath_rate=dpr[lyr], param_dict=layer_dict_i))
+        self.add_module(f'layers_{lyr}', Attention(config, droppath_rate=dpr[lyr], param_dict=layer_dict_i))
 
     # weight initialization
     if param_dict is not None:
