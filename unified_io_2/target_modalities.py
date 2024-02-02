@@ -30,14 +30,17 @@ class TextEmbedder(nn.Module):
       cfg.text_pos_emb, cfg.decoder_max_text_length,
       cfg.emb_dim, cfg.head_dim, True, 1, cfg.dtype)
     self.modality_embedding = nn.Parameter(torch.zeros((cfg.emb_dim,), dtype=torch.float32))
-    
-  def forward(self, inputs, shared_embed, mask=None, pos_ids=None, segment_ids=None, targets=None):
+
+  def forward(self, inputs, shared_embed, mask, pos_ids=None, segment_ids=None, targets=None,
+              cur_index=None):
     cfg = self.config
     bs = inputs.shape[0]
-    if mask is None:
-      mask = (inputs > 0).to(torch.int32)
+
     if pos_ids is None:
-      pos_ids = torch.arange(inputs.shape[1], dtype=torch.int32)[None, ...]
+      if cur_index is not None:
+        pos_ids = torch.full_like(inputs, cur_index)
+      else:
+        pos_ids = torch.arange(inputs.shape[1], dtype=torch.int32)[None, ...]
 
     x = shared_embed(inputs)
 

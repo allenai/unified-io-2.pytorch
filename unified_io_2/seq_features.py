@@ -13,7 +13,7 @@ class TargetSequence:
   input_embedding: torch.Tensor
   """Input embeddings to the decoder"""
 
-  position_id: torch.Tensor
+  position_embed: torch.Tensor
   """Int position ids or embedding"""
 
   modality_id: torch.Tensor
@@ -48,8 +48,8 @@ class TargetSequence:
   def __post_init__(self):
     bs, seq_len = self.input_embedding.shape[:2]
 
-    if self.position_id is not None:
-      assert self.position_id.shape[:2] in [(1, seq_len), (bs, seq_len)]
+    if self.position_embed is not None:
+      assert self.position_embed.shape[:2] in [(1, seq_len), (bs, seq_len)]
 
     assert self.modality_id.shape in [(), (1, seq_len), (bs, seq_len)]
     assert self.modality_id.dtype == torch.int32
@@ -60,7 +60,7 @@ class TargetSequence:
 
     if self.mask is not None:
       assert self.mask.shape == (bs, seq_len)
-      assert self.mask.dtype == torch.int32 or self.mask.dtype == torch.bool_
+      assert self.mask.dtype == torch.int32 or self.mask.dtype == torch.bool
 
     if self.attn_pattern_mask is not None:
       assert self.attn_pattern_mask.shape[0] in [1, bs]

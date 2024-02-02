@@ -5,6 +5,8 @@ from typing import Any, Optional, Tuple, List
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from transformers import GenerationMixin, Cache, LlamaModel, DynamicCache
+from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from unified_io_2.config import Config, T5Config
 from unified_io_2 import modality_processing, seq_features, layers
@@ -81,7 +83,7 @@ class Encoder(nn.Module):
 class DecoderLayer(nn.Module):
   """Transformer decoder layer that attends to the encoder."""
 
-  def __init__(self, config: T5Config, enable_xattention=True):
+  def __init__(self, config: T5Config, enable_xattention=True, layer_idx=None):
     super().__init__()
     self.config = config
     self.enable_xattention = enable_xattention
@@ -89,7 +91,7 @@ class DecoderLayer(nn.Module):
     dim = config.emb_dim
     self.pre_self_attention_layer_norm = layers.RMSNorm(dim)
     self.self_attention = layers.MultiHeadDotProductAttention(
-      dim, config.num_heads, config.head_dim, qk_norm=config.qk_norm)
+      dim, config.num_heads, config.head_dim, qk_norm=config.qk_norm, layer_idx=layer_idx)
 
     if enable_xattention:
       self.pre_cross_attention_layer_norm = layers.RMSNorm(dim)
@@ -111,6 +113,7 @@ class DecoderLayer(nn.Module):
                decoder_sinusoids=None,
                encoder_sinusoids=None,
                attn_pattern_mask=None,
+               past_key_values: Optional[DynamicCache]=None
                ):
     # inputs: embedded inputs to the decoder with shape [batch, length, emb_dim]
     x = self.pre_self_attention_layer_norm(inputs)
@@ -123,7 +126,8 @@ class DecoderLayer(nn.Module):
       decoder_bias,
       q_sinusoids=decoder_sinusoids,
       k_sinusoids=decoder_sinusoids,
-      attn_pattern_mask=attn_pattern_mask
+      attn_pattern_mask=attn_pattern_mask,
+      past_key_values=past_key_values
     )
 
     x = self.drop(x)
@@ -156,8 +160,13 @@ class DecoderLayer(nn.Module):
     return z
 
 
-class Decoder(nn.Module):
+class Decoder(nn.Module, GenerationMixin):
   """A stack of decoder layers as a part of an encoder-decoder architecture."""
+
+  main_input_name = "input_ids"
+
+  def can_generate(self):
+    return True
 
   def __init__(self, config: T5Config):
     super().__init__()
@@ -168,21 +177,31 @@ class Decoder(nn.Module):
       enable_xattention = False
       if i % config.decoder_xattention_internval == 0 or i == (n-1):
         enable_xattention = True
-      _layers.append(DecoderLayer(config, enable_xattention))
+      _layers.append(DecoderLayer(config, enable_xattention, layer_idx=i))
 
     self.layers = nn.Sequential(*_layers)
     self.decoder_norm = layers.RMSNorm(config.emb_dim)
     self.drop = nn.Dropout(p=config.dropout_rate)
 
-  def __call__(self,
-               encoded,
-               decoder_embedding,
-               decoder_pos_emb=None,
-               decoder_attn_mask=None,
-               encoder_pos_emb=None,
-               encoder_decoder_mask=None,
-               decoder_bias=None,
-               attn_pattern_mask=None):
+  def __call__(
+    self,
+    input_ids=None,
+    encoded=None,
+    decoder_embedding=None,
+    decoder_pos_emb=None,
+    decoder_attn_mask=None,
+    encoder_pos_emb=None,
+    encoder_decoder_mask=None,
+    decoder_bias=None,
+    attn_pattern_mask=None,
+
+    # Use for inference
+    past_key_values: Optional[DynamicCache] = None,
+    return_dict=False,
+    output_attentions=False,
+    output_hidden_states=False,
+    logit_weights=None
+  ):
 
     cfg = self.config
     assert decoder_embedding.ndim == 3  # [batch, len]
@@ -200,6 +219,8 @@ class Decoder(nn.Module):
     assert not use_rope or not cfg.use_cross_abs_pos_bias
     encoder_sinusoids = encoder_pos_emb if use_rope else None
     decoder_sinusoids = decoder_pos_emb if use_rope else None
+
+    return_kv_cache = []
 
     for lyr_ix, lyr in enumerate(self.layers):
       # [batch, length, emb_dim] -> [batch, length, emb_dim]
@@ -223,14 +244,80 @@ class Decoder(nn.Module):
         cross_abs_pos_bias=cross_abs_pos_bias,
         decoder_sinusoids=decoder_sinusoids,
         encoder_sinusoids=encoder_sinusoids,
-        attn_pattern_mask=attn_pattern_lyr)
+        attn_pattern_mask=attn_pattern_lyr,
+        past_key_values=past_key_values
+      )
 
     y = self.decoder_norm(y)
     y = self.drop(y)
-    return y
+
+    if return_dict:
+      logits = F.linear(y, logit_weights)
+      logits = logits / math.sqrt(y.shape[-1])
+      return CausalLMOutputWithPast(
+        logits=logits,
+        hidden_states=y if output_hidden_states else None,
+      )
+    else:
+      return y
+
+  def prepare_inputs_for_generation(
+      self, input_ids, encoder_pos_emb, encoded, encoder_mask, modality, use_cache,
+      embed_token_id, logit_weights, past_key_values=None
+  ):
+    cfg = self.config
+    cur_index = input_ids.shape[1]
+    if use_cache:
+      # Embed just the most recently generated tokens
+      input_ids = input_ids[:, -1:]
+      seq = embed_token_id(
+        input_ids, mask=torch.ones_like(input_ids, dtype=torch.int32), cur_index=cur_index)
+      encoder_decoder_mask = layers.make_attention_mask(
+        torch.ones(seq.input_embedding.shape[:2], device=seq.input_embedding.device),
+        encoder_mask
+      )
+    else:
+      # Embeds all the tokens
+      seq = embed_token_id(input_ids, mask=torch.ones_like(input_ids, dtype=torch.int32))
+      encoder_decoder_mask = layers.make_attention_mask(
+        seq.mask, encoder_mask).to(cfg.dtype)
+
+    if use_cache:
+      if past_key_values is None:
+        past_key_values = DynamicCache()
+    else:
+      past_key_values = None
+
+    return dict(
+      past_key_values=past_key_values,
+      encoded=encoded,
+      decoder_embedding=seq.input_embedding,
+      decoder_pos_emb=seq.position_embed,
+      decoder_attn_mask=None,
+      encoder_pos_emb=encoder_pos_emb,
+      encoder_decoder_mask=encoder_decoder_mask,
+      attn_pattern_mask=seq.attn_pattern_mask,
+      logit_weights=logit_weights
+    )
+
+  def _update_model_kwargs_for_generation(
+        self,
+        outputs,
+        model_kwargs,
+        is_encoder_decoder: bool = False,
+        standardize_cache_format: bool = False
+  ):
+    if "cur_index" in model_kwargs:
+      model_kwargs["cur_index"] += 1
+    return super()._update_model_kwargs_for_generation(
+      outputs, model_kwargs, is_encoder_decoder, standardize_cache_format
+    )
+
+  def _reorder_cache(self, past_key_values, beam_idx):
+    raise ValueError()
 
 
-class UnifiedIO(nn.Module):
+class UnifiedIO(nn.Module, GenerationMixin):
   """An encoder-decoder Transformer model."""
   def __init__(self, t5_config, input_encoders, target_encoders) -> None:
     super().__init__()
@@ -271,10 +358,34 @@ class UnifiedIO(nn.Module):
     self.encoder = Encoder(cfg)
     self.decoder = Decoder(cfg)
 
-  def forward(self, batch, horizontally_pack_inputs=None, horizontally_pack_targets=False) -> torch.Tensor:
-    cfg = self.config
-    features = unflatten_dict(batch, sep="/")
-    input_features = features["inputs"]
+  def generate(
+      self,
+      **kwargs,
+  ):
+    batch = kwargs.pop("batch")
+    batch = unflatten_dict(batch)
+    input_seq = self.encode_batch(batch["inputs"], False)
+    encoder_hidden = self.encoder(input_seq)
+    modality = kwargs["modality"]
+
+    bs = input_seq.batch_size
+    input_ids = torch.zeros((bs, 1), dtype=torch.long, device=input_seq.embed.device)
+
+    def embed_token_id(input_id, mask, cur_index=None):
+      return self.target_embedders[modality](
+        input_id, mask=mask, cur_index=cur_index, shared_embed=self.shared_embedding[modality])
+
+    return self.decoder.generate(
+      **kwargs,
+      input_ids=input_ids,
+      logit_weights=self.shared_embedding[modality].weight,
+      embed_token_id=embed_token_id,
+      encoder_pos_emb=input_seq.position_embed,
+      encoded=encoder_hidden,
+      encoder_mask=input_seq.mask
+    )
+
+  def encode_batch(self, input_features, horizontally_pack_inputs):
     input_parts: List[InputSequence] = []
     for k, v in self.input_embedders.items():
       input_parts.append(v(**input_features[k], shared_embed=self.shared_embedding.get(k)))
@@ -284,8 +395,19 @@ class UnifiedIO(nn.Module):
       input_seq = seq_features.pack_horizontally(input_parts_to_pack, horizontally_pack_inputs)
     else:
       input_seq = seq_features.concat_sequences(input_parts_to_pack)
+    return input_seq
 
-    embed = self.encoder(input_seq)
+  def forward(
+      self,
+      batch,
+      horizontally_pack_inputs=None,
+      horizontally_pack_targets=False,
+  ) -> torch.Tensor:
+    cfg = self.config
+    features = unflatten_dict(batch, sep="/")
+
+    input_seq = self.encode_batch(batch["inputs"], horizontally_pack_inputs)
+    encoder_hidden = self.encoder(input_seq)
 
     target_parts = []
     target_features = features["targets"]
@@ -318,8 +440,8 @@ class UnifiedIO(nn.Module):
 
     # Do the decoding and output the feature vector for transformers.
     hidden_state = self.decoder(
-      embed,
-      decoder_pos_emb=target_seq.position_id,
+      encoded=encoder_hidden,
+      decoder_pos_emb=target_seq.position_embed,
       decoder_embedding=target_seq.input_embedding,
       decoder_attn_mask=decoder_attn_mask,
       encoder_pos_emb=input_seq.position_embed,
@@ -344,4 +466,3 @@ class UnifiedIO(nn.Module):
       logits[name] = (modality_logits, targets, mask)
 
     return logits
-

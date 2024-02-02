@@ -165,6 +165,12 @@ class T5Config:
   scan_unroll: Union[int, str] = "all"
   scan_axis: int = 1
 
+  @property
+  def is_encoder_decoder(self):
+    # FIXME need this so we can call generate on the Decoder
+    return False
+
+
 @dataclass
 class VAEConfig:
   # VQGAN CONFIG
@@ -379,8 +385,7 @@ class Config:
 
 # TODO these need to be tested
 LARGE = Config(
-  t5_config=dataclasses.replace(
-    T5Config(),
+  t5_config=T5Config(
     emb_dim=1024,
     num_heads=16,
     num_encoder_layers=24,
@@ -392,8 +397,7 @@ LARGE = Config(
 )
 
 XL = Config(
-  t5_config=dataclasses.replace(
-    T5Config(),
+  t5_config=T5Config(
     emb_dim=2048,
     num_heads=16,
     num_encoder_layers=24,
@@ -401,15 +405,13 @@ XL = Config(
     head_dim=128,
     mlp_dim=5120,
   ),
-  image_history_cfg=dataclasses.replace(
-    ImageResamplerConfig(),
+  image_history_cfg=ImageResamplerConfig(
     emb_dim=1024,
     num_heads=16,
     head_dim=64,
     mlp_dim=4096,
   ),
-  audio_history_cfg=dataclasses.replace(
-    ImageResamplerConfig(),
+  audio_history_cfg=ImageResamplerConfig(
     emb_dim=1024,
     num_heads=16,
     head_dim=64,
@@ -419,8 +421,7 @@ XL = Config(
 
 
 XXL = Config(
-  t5_config=dataclasses.replace(
-    T5Config(),
+  t5_config=T5Config(
     emb_dim=3072,
     num_heads=24,
     num_encoder_layers=24,
@@ -428,8 +429,7 @@ XXL = Config(
     head_dim=128,
     mlp_dim=8192,
   ),
-  image_history_cfg=dataclasses.replace(
-    ImageResamplerConfig(),
+  image_history_cfg=ImageResamplerConfig(
     emb_dim=1024,
     num_heads=16,
     head_dim=64,
@@ -439,8 +439,7 @@ XXL = Config(
     attn_qk_norm=False,
     attn_scaled_cosine=True,
   ),
-  audio_history_cfg=dataclasses.replace(
-    ImageResamplerConfig(),
+  audio_history_cfg=ImageResamplerConfig(
     emb_dim=1024,
     num_heads=16,
     head_dim=64,

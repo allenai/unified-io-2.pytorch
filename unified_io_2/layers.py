@@ -8,6 +8,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 
+from transformers import DynamicCache
+
 
 def get_1d_position_embedding(pos_emb_type, length, emb_dim, head_dim, is_token, modality_idx, prefix=''):
   if pos_emb_type == "llama_rope":
@@ -444,6 +446,7 @@ class MultiHeadDotProductAttention(nn.Module):
       depth_normalize: bool = True,
       clip_attn_logit: Any = None,
       scaled_cosine: bool = False,
+      layer_idx: int=None
   ):
     super().__init__()
     self.num_heads = num_heads
@@ -452,6 +455,7 @@ class MultiHeadDotProductAttention(nn.Module):
     self.dropout_rate = dropout_rate
     self.dropout_broadcast_dims = dropout_broadcast_dims
     self.float32_logits = float32_logits
+    self.layer_idx = layer_idx
 
     # query / key / value projection
     self.query = nn.Linear(emb_dim, emb_dim, bias=use_bias)
@@ -524,6 +528,7 @@ class MultiHeadDotProductAttention(nn.Module):
       k_sinusoids: Optional[torch.Tensor] = None,
       attn_pattern_mask: Optional[torch.Tensor] = None,
       *,
+      past_key_values: Optional[DynamicCache]=None,
       decode: bool = False) -> torch.Tensor:
     """Applies multi-head dot product attention on the input data.
 
@@ -583,6 +588,10 @@ class MultiHeadDotProductAttention(nn.Module):
     else:
       logit_scale = None
 
+    if past_key_values is not None:
+      past_key_values.update(key, value, self.layer_idx)
+      key, value = past_key_values[self.layer_idx]
+
     # Apply attention.
     x = dot_product_attention(
         query,
@@ -602,7 +611,6 @@ class MultiHeadDotProductAttention(nn.Module):
     x = x.reshape(bs, q_len, emb_dim)
     # Back to the original inputs dimensions.
     out = self.out(x)
-    
     return out
 
 
