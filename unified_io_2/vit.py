@@ -7,19 +7,12 @@ from unified_io_2 import layers
 
 
 class MLP(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
     self.fc1 = nn.Linear(config.emb_dim, config.mlp_dim, bias=True)
     self.gelu = nn.GELU(approximate='none')
     self.fc2 = nn.Linear(config.mlp_dim, config.emb_dim, bias=True)
-
-    if param_dict is not None:
-      with torch.no_grad():
-        self.fc1.weight.data.copy_(torch.from_numpy(param_dict['c_fc']['kernel']).transpose(0, 1))
-        self.fc1.bias.data.copy_(torch.from_numpy(param_dict['c_fc']['bias']))
-        self.fc2.weight.data.copy_(torch.from_numpy(param_dict['c_proj']['kernel']).transpose(0, 1))
-        self.fc2.bias.data.copy_(torch.from_numpy(param_dict['c_proj']['bias']))
   
   def forward(self, x):
     x = self.fc1(x)
@@ -35,7 +28,6 @@ class MultiHeadDotProductAttention(nn.Module):
       num_heads: int,
       head_dim: int,
       dropout_rate: float = 0.,
-      param_dict: Any = None,
       float32_logits: bool = False  # computes logits in float32 for stability.
   ):
     super().__init__()
@@ -55,17 +47,6 @@ class MultiHeadDotProductAttention(nn.Module):
 
     self.attn_drop = layers.Dropout(dropout_rate, broadcast_dims=(-2, ))
     self.out_proj = nn.Linear(emb_dim, emb_dim, bias=True)
-
-    if param_dict is not None:
-      with torch.no_grad():
-        self.query_in_proj_weight.data.copy_(torch.from_numpy(param_dict['query']['kernel']).transpose(0, 1))
-        self.query_in_proj_bias.data.copy_(torch.from_numpy(param_dict['query']['bias']))
-        self.key_in_proj_weight.data.copy_(torch.from_numpy(param_dict['key']['kernel']).transpose(0, 1))
-        self.key_in_proj_bias.data.copy_(torch.from_numpy(param_dict['key']['bias']))
-        self.value_in_proj_weight.data.copy_(torch.from_numpy(param_dict['value']['kernel']).transpose(0, 1))
-        self.value_in_proj_bias.data.copy_(torch.from_numpy(param_dict['value']['bias']))
-        self.out_proj.weight.data.copy_(torch.from_numpy(param_dict['out']['kernel']).transpose(0, 1))
-        self.out_proj.bias.data.copy_(torch.from_numpy(param_dict['out']['bias']))
   
   def forward(self, inputs_q, inputs_kv, attn_mask: Optional[torch.Tensor] = None):
     # inputs_q: [batch_size, len_q, emb_dim]
@@ -112,7 +93,7 @@ class MultiHeadDotProductAttention(nn.Module):
 
 
 class ResidualAttentionBlock(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
     self.ln_1 = layers.LayerNorm(config.emb_dim, eps=1e-5)
@@ -121,19 +102,11 @@ class ResidualAttentionBlock(nn.Module):
         config.num_heads,
         config.head_dim,
         config.dropout_rate,
-        param_dict=None if param_dict is None else param_dict['MultiHeadDotProductAttention_0']
         # The uio2 jax code did not use this parameter.
         # float32_logits=config.float32_attention_logits
     )
     self.ln_2 = layers.LayerNorm(config.emb_dim, eps=1e-5)
-    self.mlp = MLP(config, param_dict=None if param_dict is None else param_dict['MLP_0'])
-
-    if param_dict is not None:
-      with torch.no_grad():
-        self.ln_1.weight.data.copy_(torch.from_numpy(param_dict['ln_1']['scale']))
-        self.ln_1.bias.data.copy_(torch.from_numpy(param_dict['ln_1']['bias']))
-        self.ln_2.weight.data.copy_(torch.from_numpy(param_dict['ln_2']['scale']))
-        self.ln_2.bias.data.copy_(torch.from_numpy(param_dict['ln_2']['bias']))
+    self.mlp = MLP(config)
   
   def forward(self, x, attn_mask):
     x1 = self.ln_1(x)
@@ -146,14 +119,13 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
     self.num_layers = config.num_layers
     resblocks = []
     for i in range(config.num_layers):
-      resblocks_dict_i = None if param_dict is None else param_dict[f'ResidualAttentionBlock_{str(i)}']
-      resblocks.append(ResidualAttentionBlock(config, resblocks_dict_i))
+      resblocks.append(ResidualAttentionBlock(config))
     self.resblocks = nn.ModuleList(resblocks)
   
   def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
@@ -170,7 +142,7 @@ def _expand_token(token, batch_size: int):
 
 
 class VisionTransformer(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
 
@@ -180,16 +152,7 @@ class VisionTransformer(nn.Module):
     self.class_embedding = nn.Parameter(scale * torch.randn(config.emb_dim))
     self.positional_embedding = nn.Parameter(scale * torch.randn(config.num_pos, config.emb_dim))
     self.pre_ln = layers.LayerNorm(config.emb_dim, eps=1e-5)
-    transformer_dict = None if param_dict is None else param_dict['Transformer_0']
-    self.transformer = Transformer(config, param_dict=transformer_dict)
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.embedding.weight.data.copy_(torch.from_numpy(param_dict['embedding']['kernel']).transpose(0, 1))
-        self.class_embedding.data.copy_(torch.from_numpy(param_dict['class_embedding']))
-        self.positional_embedding.data.copy_(torch.from_numpy(param_dict['positional_embedding']))
-        self.pre_ln.weight.data.copy_(torch.from_numpy(param_dict['pre_ln']['scale']))
-        self.pre_ln.bias.data.copy_(torch.from_numpy(param_dict['pre_ln']['bias']))
+    self.transformer = Transformer(config)
 
   def add_pos_emb(self, x, pos_ids, patch_num):
     cls_emb = self.positional_embedding[0]
@@ -239,10 +202,10 @@ class VisionTransformer(nn.Module):
 
 class ImageFeature(nn.Module):
   """Image features"""
-  def __init__(self, config, param_dict=None) -> None:
+  def __init__(self, config) -> None:
     super().__init__()
     self.config = config
-    self.vision_transformer = VisionTransformer(config, param_dict['vision_transformer'])
+    self.vision_transformer = VisionTransformer(config)
     
   def forward(self, x, mask, pos_ids, *, patch_num: Any = (16, 16)):
     x, x1 = self.vision_transformer(x, mask, pos_ids, patch_num=patch_num)
@@ -250,13 +213,9 @@ class ImageFeature(nn.Module):
 
 
 if __name__ == "__main__":
-  print("Loading uio2-large-2M ckpt...")
-  import numpy as np
-  ckpt_file = "checkpoints/unified-io-2_large_instructional_tunning_2M.npz"
-  param_dict = np.load(ckpt_file, allow_pickle=True)['input_image_encoder'].item()['image_encoder']
-  print("Building and Initiazling pytorch vit...")
+  print("Building pytorch vit...")
   vit_cfg = ImageVitFeatureConfig()
-  image_encoder = ImageFeature(vit_cfg, param_dict)
+  image_encoder = ImageFeature(vit_cfg)
   image_encoder.eval()
   print("Dummy input...")
   len = 576 # 384 / 16 * 384 / 16

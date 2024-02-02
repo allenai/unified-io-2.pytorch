@@ -393,7 +393,8 @@ LARGE = Config(
     head_dim=64,
     mlp_dim=2816
   ),
-  image_history_cfg=ImageResamplerConfig()
+  image_history_cfg=ImageResamplerConfig(),
+  audio_history_cfg=AudioResamplerConfig(),
 )
 
 XL = Config(
@@ -411,7 +412,7 @@ XL = Config(
     head_dim=64,
     mlp_dim=4096,
   ),
-  audio_history_cfg=ImageResamplerConfig(
+  audio_history_cfg=AudioResamplerConfig(
     emb_dim=1024,
     num_heads=16,
     head_dim=64,
@@ -439,7 +440,7 @@ XXL = Config(
     attn_qk_norm=False,
     attn_scaled_cosine=True,
   ),
-  audio_history_cfg=ImageResamplerConfig(
+  audio_history_cfg=AudioResamplerConfig(
     emb_dim=1024,
     num_heads=16,
     head_dim=64,

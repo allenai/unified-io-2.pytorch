@@ -16,31 +16,22 @@ from unified_io_2.utils import unflatten_dict
 
 class EncoderLayer(nn.Module):
   """Transformer encoder layer."""
-  def __init__(self, config: T5Config, param_dict=None):
+  def __init__(self, config: T5Config):
     super().__init__()
     dim = config.emb_dim
     self.pre_attention_norm = layers.RMSNorm(dim)
-    attn_dict = None if param_dict is None else param_dict['attention']
     self.attention = layers.MultiHeadDotProductAttention(
       dim,
       config.num_heads,
       config.head_dim,
       dropout_rate=config.dropout_rate,
-      param_dict=attn_dict,
       float32_logits=config.float32_attention_logits,
       qk_norm=config.qk_norm,
     )
     self.pre_mlp_norm = layers.RMSNorm(dim)
     self.drop = layers.Dropout(config.dropout_rate, broadcast_dims=(-2, ))
-    mlp_dict = None if param_dict is None else param_dict['mlp']
     self.mlp = layers.MlpBlock(dim, config.mlp_dim, config.mlp_activations,
-                               intermediate_dropout_rate=config.dropout_rate, param_dict=mlp_dict)
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.pre_attention_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_attention_layer_norm']['scale']))
-        self.pre_mlp_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_mlp_layer_norm']['scale']))
+                               intermediate_dropout_rate=config.dropout_rate)
 
   def __call__(self, inputs, encoder_mask=None, abs_bias=None, sinusoids=None):
     # Attention block.
@@ -69,19 +60,13 @@ class EncoderLayer(nn.Module):
 
 class Encoder(nn.Module):
   """A stack of encoder layers."""
-  def __init__(self, config: T5Config, param_dict=None):
+  def __init__(self, config: T5Config):
     super().__init__()
     self.drop = layers.Dropout(config.dropout_rate, broadcast_dims=(-2, ))
     for lyr in range(config.num_encoder_layers):
-      layer_dict_i = None if param_dict is None else param_dict[f'layers_{lyr}']
-      self.add_module(f'layers_{lyr}', EncoderLayer(config, param_dict=layer_dict_i))
+      self.add_module(f'layers_{lyr}', EncoderLayer(config))
     self.encoder_norm = layers.RMSNorm(config.emb_dim)
     self.config = config
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.encoder_norm.scale.data.copy_(torch.from_numpy(param_dict['encoder_norm']['scale']))
 
   def __call__(self, seq: InputSequence):
     embed = self.drop(seq.embed)
@@ -106,7 +91,7 @@ class Encoder(nn.Module):
 class DecoderLayer(nn.Module):
   """Transformer decoder layer that attends to the encoder."""
 
-  def __init__(self, config: T5Config, enable_xattention=True, param_dict=None, layer_idx=None):
+  def __init__(self, config: T5Config, enable_xattention=True, layer_idx=None):
     super().__init__()
     self.config = config
     self.enable_xattention = enable_xattention
@@ -114,29 +99,19 @@ class DecoderLayer(nn.Module):
 
     dim = config.emb_dim
     self.pre_self_attention_norm = layers.RMSNorm(dim)
-    self_attn_dict = None if param_dict is None else param_dict['self_attention']
     self.self_attention = layers.MultiHeadDotProductAttention(
-      dim, config.num_heads, config.head_dim, qk_norm=config.qk_norm, param_dict=self_attn_dict,
+      dim, config.num_heads, config.head_dim, qk_norm=config.qk_norm,
       float32_logits=config.float32_attention_logits, layer_idx=layer_idx)
 
     if enable_xattention:
       self.pre_cross_attention_norm = layers.RMSNorm(dim)
-      cross_attn_dict = None if param_dict is None else param_dict['encoder_decoder_attention']
       self.encoder_decoder_attention = layers.MultiHeadDotProductAttention(
-        dim, config.num_heads, config.head_dim, dropout_rate=config.dropout_rate, param_dict=cross_attn_dict,float32_logits=config.float32_attention_logits, qk_norm=config.qk_norm)
+        dim, config.num_heads, config.head_dim, dropout_rate=config.dropout_rate, float32_logits=config.float32_attention_logits, qk_norm=config.qk_norm)
 
     self.pre_mlp_norm = layers.RMSNorm(dim)
     self.drop = layers.Dropout(config.dropout_rate, broadcast_dims=(-2, ))
-    mlp_dict = None if param_dict is None else param_dict['mlp']
     self.mlp = layers.MlpBlock(dim, config.mlp_dim, config.mlp_activations,
-                               intermediate_dropout_rate=config.dropout_rate, param_dict=mlp_dict)
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.pre_self_attention_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_self_attention_layer_norm']['scale']))
-        self.pre_cross_attention_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_cross_attention_layer_norm']['scale']))
-        self.pre_mlp_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_mlp_layer_norm']['scale']))
+                               intermediate_dropout_rate=config.dropout_rate)
 
   def __call__(self,
                inputs,
@@ -203,7 +178,7 @@ class Decoder(nn.Module, GenerationMixin):
   def can_generate(self):
     return True
 
-  def __init__(self, config: T5Config, param_dict=None):
+  def __init__(self, config: T5Config):
     super().__init__()
     self.config = config
     n = config.num_decoder_layers
@@ -211,17 +186,11 @@ class Decoder(nn.Module, GenerationMixin):
       enable_xattention = False
       if lyr % config.decoder_xattention_internval == 0 or lyr == (n-1):
         enable_xattention = True
-      layer_dict_i = None if param_dict is None else param_dict[f'layers_{lyr}']
       self.add_module(f'layers_{lyr}', DecoderLayer(
-        config, enable_xattention, param_dict=layer_dict_i, layer_idx=lyr))
+        config, enable_xattention, layer_idx=lyr))
 
     self.decoder_norm = layers.RMSNorm(config.emb_dim)
     self.drop = layers.Dropout(p=config.dropout_rate, broadcast_dims=(-2,))
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.decoder_norm.scale.data.copy_(torch.from_numpy(param_dict['decoder_norm']['scale']))
 
   def __call__(
     self,
@@ -359,7 +328,7 @@ class Decoder(nn.Module, GenerationMixin):
 
 class UnifiedIO(nn.Module, GenerationMixin):
   """An encoder-decoder Transformer model."""
-  def __init__(self, t5_config, input_encoders, target_encoders, npy_ckpt=None) -> None:
+  def __init__(self, t5_config, input_encoders, target_encoders) -> None:
     super().__init__()
     self.config = t5_config
     self.input_encoders = input_encoders
@@ -379,13 +348,6 @@ class UnifiedIO(nn.Module, GenerationMixin):
         num_embeddings=cfg.audio_vocab_size,
         embedding_dim=cfg.emb_dim)
 
-    # weight initialization
-    if npy_ckpt is not None:
-      with torch.no_grad():
-        self.text_token_embedder.weight.data.copy_(torch.from_numpy(npy_ckpt['text_token_embedder'].item()['embedding']))
-        self.image_token_embedder.weight.data.copy_(torch.from_numpy(npy_ckpt['image_token_embedder'].item()['embedding']))
-        self.audio_token_embedder.weight.data.copy_(torch.from_numpy(npy_ckpt['audio_token_embedder'].item()['embedding']))
-
     self.shared_embedding = {
       'text': self.text_token_embedder,
       'image': self.image_token_embedder,
@@ -402,10 +364,8 @@ class UnifiedIO(nn.Module, GenerationMixin):
       {k: v.get_encoder(cfg)
        for k, v in self.target_encoders.items()})
 
-    encoder_param_dict = None if npy_ckpt is None else npy_ckpt['encoder'].item()
-    self.encoder = Encoder(cfg, param_dict=encoder_param_dict)
-    decoder_param_dict = None if npy_ckpt is None else npy_ckpt['decoder'].item()
-    self.decoder = Decoder(cfg, param_dict=decoder_param_dict)
+    self.encoder = Encoder(cfg)
+    self.decoder = Decoder(cfg)
 
   def generate(
       self,

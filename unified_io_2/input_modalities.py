@@ -60,7 +60,7 @@ class ModalityEncoder:
 
 # Text Modalities
 class InputTextEmbedder(nn.Module):
-  def __init__(self, config: T5Config, param_dict=None) -> None:
+  def __init__(self, config: T5Config) -> None:
     super().__init__()
     self.config = config
     cfg = config
@@ -69,8 +69,6 @@ class InputTextEmbedder(nn.Module):
       cfg.text_pos_emb, cfg.encoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1))
     if "llama_rope" in cfg.text_pos_emb:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
-      if param_dict is not None:
-        self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
 
   def forward(self, tokens, shared_embed, mask=None, pos_ids=None):
 
@@ -95,9 +93,8 @@ class InputTextEmbedder(nn.Module):
 
 class InputTextEncoder(ModalityEncoder):
   """Tokenize and embed input text"""
-  def __init__(self, param_dict=None):
+  def __init__(self):
     super().__init__()
-    self.param_dict = param_dict
 
   def preprocess_inputs(self, features, vocab, sequence_length) -> Dict:
     if features.get(f"text_inputs") is None:
@@ -125,11 +122,11 @@ class InputTextEncoder(ModalityEncoder):
     }
 
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return InputTextEmbedder(config, param_dict=self.param_dict)
+    return InputTextEmbedder(config)
 
 
 class ViTImageEmbedder(nn.Module):
-  def __init__(self, image_encoder: nn.Module, t5_config: T5Config, modality: str, use_vit: bool = False, freeze_vit: bool = True, param_dict=None) -> None:
+  def __init__(self, image_encoder: nn.Module, t5_config: T5Config, modality: str, use_vit: bool = False, freeze_vit: bool = True) -> None:
     super().__init__()
     self.t5_config = t5_config
     cfg = self.t5_config
@@ -172,10 +169,6 @@ class ViTImageEmbedder(nn.Module):
     if "llama_rope" in pos_emb_type:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
     
-    if param_dict is not None:
-      self.projection.weight.data.copy_(torch.from_numpy(param_dict['projection']['kernel']).transpose(0, 1))
-      self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
-    
   def __call__(self, input, pos_ids, mask, *, use_constraints=True):
     cfg = self.t5_config
     bs = input.shape[0]
@@ -202,15 +195,14 @@ class ViTImageEmbedder(nn.Module):
     return InputSequence(x, mask, position_embed = pos_emb)
 
 class InputImageViTEncoder(ModalityEncoder):
-  def __init__(self, image_encoder, use_vit = False, freeze_vit = True, param_dict=None) -> None:
+  def __init__(self, image_encoder, use_vit = False, freeze_vit = True) -> None:
     super().__init__()
     self.image_encoder = image_encoder
     self.use_vit = use_vit
     self.freeze_vit = freeze_vit
-    self.param_dict = param_dict
     
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return ViTImageEmbedder(self.image_encoder, config, "image", self.use_vit, self.freeze_vit, param_dict=self.param_dict)
+    return ViTImageEmbedder(self.image_encoder, config, "image", self.use_vit, self.freeze_vit)
 
   def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
     image_input_size = IMAGE_INPUT_SIZE
@@ -320,7 +312,7 @@ class InputImageViTEncoder(ModalityEncoder):
 class ViTHistoryEmbedder(nn.Module):
   """Embeds image or audio history using an encoder and then a perciever"""
   def __init__(
-      self, vit_image_encoder, resampler_config: Union[ImageResamplerConfig, AudioResamplerConfig], config: T5Config, modality, max_images_per_example, param_dict=None
+      self, vit_image_encoder, resampler_config: Union[ImageResamplerConfig, AudioResamplerConfig], config: T5Config, modality, max_images_per_example,
   ) -> None:
     super().__init__()
     self.vit_image_encoder = vit_image_encoder
@@ -330,7 +322,7 @@ class ViTHistoryEmbedder(nn.Module):
     self.max_images_per_example = max_images_per_example
   
     cfg = self.config
-    self.resampler = Resampler(self.resampler_config, param_dict=param_dict['resampler']['PerceiverResampler_0'])
+    self.resampler = Resampler(self.resampler_config)
     self.modality_idx = 4 if "image" in self.modality else 5
 
     if self.vit_image_encoder is not None:
@@ -361,11 +353,6 @@ class ViTHistoryEmbedder(nn.Module):
 
     if "llama_rope" in pos_emb_type:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
-
-    if param_dict is not None:
-      self.pre_projection.weight.data.copy_(torch.from_numpy(param_dict['pre_projection']['kernel']).transpose(0, 1))
-      self.post_projection.weight.data.copy_(torch.from_numpy(param_dict['post_projection']['kernel']).transpose(0, 1))
-      self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
 
   def __call__(self, input, pos_ids, mask, *, use_constraints=True):
     cfg = self.config
@@ -433,16 +420,15 @@ class ViTHistoryEmbedder(nn.Module):
 
 
 class InputImageHistoryViTEncoder(ModalityEncoder):
-  def __init__(self, image_encoder, resampler_config, max_images_per_batch=None, param_dict=None) -> None:
+  def __init__(self, image_encoder, resampler_config, max_images_per_batch=None) -> None:
     super().__init__()
     self.image_encoder = image_encoder
     self.resampler_config = resampler_config
     self.max_images_per_batch = max_images_per_batch
-    self.param_dict = param_dict
     
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTHistoryEmbedder(
-      self.image_encoder, self.resampler_config, config, "image", self.max_images_per_batch, param_dict=self.param_dict)
+      self.image_encoder, self.resampler_config, config, "image", self.max_images_per_batch)
 
   def preprocess_inputs(
       self, features: Dict, output_features, sequence_length) -> Dict[str, tf.Tensor]:
@@ -541,15 +527,14 @@ class InputImageHistoryViTEncoder(ModalityEncoder):
 
 
 class InputAudioViTEncoder(ModalityEncoder):
-  def __init__(self, audio_encoder, use_vit = False, freeze_vit = True, param_dict=None) -> None:
+  def __init__(self, audio_encoder, use_vit = False, freeze_vit = True) -> None:
     super().__init__()
     self.audio_encoder = audio_encoder
     self.use_vit = use_vit
     self.freeze_vit = freeze_vit
-    self.param_dict = param_dict
     
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return ViTImageEmbedder(self.audio_encoder, config, "audio", self.use_vit, self.freeze_vit, param_dict=self.param_dict)
+    return ViTImageEmbedder(self.audio_encoder, config, "audio", self.use_vit, self.freeze_vit)
 
   def preprocess_inputs(self, features, output_features, sequence_length) -> Dict:
     audio_input_size = AUDIO_INPUT_SIZE
@@ -647,16 +632,15 @@ class InputAudioViTEncoder(ModalityEncoder):
 
 
 class InputAudioHistoryViTEncoder(ModalityEncoder):
-  def __init__(self, audio_encoder, resampler_config, max_images_per_batch=None, param_dict=None) -> None:
+  def __init__(self, audio_encoder, resampler_config, max_images_per_batch=None) -> None:
     super().__init__()
     self.audio_encoder = audio_encoder
     self.resampler_config = resampler_config
     self.max_images_per_batch = max_images_per_batch
-    self.param_dict = param_dict
 
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ViTHistoryEmbedder(
-      self.audio_encoder, self.resampler_config, config, "audio", self.max_images_per_batch, param_dict=self.param_dict)
+      self.audio_encoder, self.resampler_config, config, "audio", self.max_images_per_batch)
 
   def preprocess_inputs(
       self, features: Dict, output_features, sequence_length) -> Dict[str, tf.Tensor]:

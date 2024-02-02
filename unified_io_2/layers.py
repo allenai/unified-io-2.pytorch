@@ -439,7 +439,6 @@ class MultiHeadDotProductAttention(nn.Module):
       use_bias: bool = False,
       dropout_rate: float = 0.,
       dropout_broadcast_dims: Sequence[int] = (-2, ),
-      param_dict: Any = None,
       float32_logits: bool = True, # compute logits in float32 for stability.
       qk_norm: bool = True,
       use_head_scale: bool = False,
@@ -496,26 +495,6 @@ class MultiHeadDotProductAttention(nn.Module):
     nn.init.kaiming_normal_(self.out.weight, mode='fan_in', nonlinearity='linear')
     if use_bias:
       nn.init.zeros_(self.out.bias)
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.query.weight.data.copy_(torch.from_numpy(param_dict['query']['kernel']).transpose(0, 1))
-        self.key.weight.data.copy_(torch.from_numpy(param_dict['key']['kernel']).transpose(0, 1))
-        self.value.weight.data.copy_(torch.from_numpy(param_dict['value']['kernel']).transpose(0, 1))
-        self.out.weight.data.copy_(torch.from_numpy(param_dict['out']['kernel']).transpose(0, 1))
-        if use_bias:
-          self.query.bias.data.copy_(torch.from_numpy(param_dict['query']['bias']))
-          self.key.bias.data.copy_(torch.from_numpy(param_dict['key']['bias']))
-          self.value.bias.data.copy_(torch.from_numpy(param_dict['value']['bias']))
-          self.out.bias.data.copy_(torch.from_numpy(param_dict['out']['bias']))
-        if qk_norm:
-          self.query_norm.scale.data.copy_(torch.from_numpy(param_dict['query_norm']['scale']))
-          self.key_norm.scale.data.copy_(torch.from_numpy(param_dict['key_norm']['scale']))
-        if scaled_cosine:
-          self.logit_scale.data.copy_(torch.from_numpy(param_dict['logit_scale']))
-        if use_head_scale:
-          self.head_scale.data.copy_(torch.from_numpy(param_dict['head_scale']))
 
   def forward(
       self,
@@ -650,7 +629,6 @@ class MlpBlock(nn.Module):
       emb_dim: int = 768,
       intermediate_dim: int = 2048,
       activations: Sequence[Union[str, Callable]] = ('relu',),
-      param_dict: Any = None,
       intermediate_dropout_rate: float = 0.1,
       dropout_broadcast_dims: Sequence[int] = (-2, ),
       use_bias: bool = False
@@ -664,18 +642,6 @@ class MlpBlock(nn.Module):
         self.add_module(f"wi_{idx}", nn.Linear(emb_dim, intermediate_dim, bias=use_bias))
     self.dropout = Dropout(intermediate_dropout_rate, broadcast_dims=dropout_broadcast_dims)
     self.wo = nn.Linear(intermediate_dim, emb_dim, bias=use_bias)
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        for idx in range(len(activations)):
-          dense_name = 'wi' if len(activations) == 1 else f'wi_{idx}'
-          getattr(self, dense_name).weight.data.copy_(torch.from_numpy(param_dict[dense_name]['kernel']).transpose(0, 1))
-          if use_bias:
-            getattr(self, dense_name).bias.data.copy_(torch.from_numpy(param_dict[dense_name]['bias']))
-        self.wo.weight.data.copy_(torch.from_numpy(param_dict['wo']['kernel']).transpose(0, 1))
-        if use_bias:
-          self.wo.bias.data.copy_(torch.from_numpy(param_dict['wo']['bias']))
   
   def forward(self, inputs):
     """Applies Transformer MlpBlock module."""

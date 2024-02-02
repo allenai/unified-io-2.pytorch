@@ -21,7 +21,7 @@ AUDIO_MODALITY_INDEX = 2
 
 
 class TextEmbedder(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
 
@@ -30,8 +30,6 @@ class TextEmbedder(nn.Module):
       cfg.text_pos_emb, cfg.decoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1))
     if "llama_rope" in cfg.text_pos_emb:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
-      if param_dict is not None:
-        self.modality_embedding.data.copy_(torch.from_numpy(param_dict['modality_embedding']))
     
   def forward(self, inputs, shared_embed, mask=None, pos_ids=None, segment_ids=None,
               targets=None, cur_index=None):
@@ -84,9 +82,8 @@ class BasicDecoder(nn.Module):
 
 class TargetTextEncoder(ModalityEncoder):
   """Tokenize and embed input text, handles multiple target texts"""
-  def __init__(self, param_dict=None):
+  def __init__(self):
     super().__init__()
-    self.param_dict = param_dict
 
   def preprocess_inputs(self, features, sequence_length) -> Dict:
     text_targets = features.get(f"text_targets")
@@ -142,7 +139,7 @@ class TargetTextEncoder(ModalityEncoder):
 
 
   def get_encoder(self, config: T5Config) -> nn.Module:
-    return TextEmbedder(config, param_dict=self.param_dict)
+    return TextEmbedder(config)
 
   def get_decoder(self, config: Config) -> nn.Module:
     return BasicDecoder(config.vocab_size, config)
