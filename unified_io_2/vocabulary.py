@@ -23,7 +23,6 @@ import hashlib
 import threading
 from typing import Any, ClassVar, Dict, Iterable, Optional, Sequence, Union
 
-from absl import logging
 import tensorflow.compat.v2 as tf
 import tensorflow_text as tf_text
 
@@ -475,16 +474,6 @@ class SentencePieceVocabulary(Vocabulary):
       # Load Python tokenizer and ensure the EOS and PAD IDs are correct.
       tokenizer = sentencepiece_processor.SentencePieceProcessor()
       tokenizer.LoadFromSerializedProto(sp_model)
-      if tokenizer.pad_id() != PAD_ID:
-        logging.warning(
-          (
-            "T5 library uses PAD_ID=%s, which is different from the "
-            "sentencepiece vocabulary, which defines pad_id=%s"
-          ),
-          PAD_ID,
-          tokenizer.pad_id(),
-        )
-
       return cls._ModelContext(tokenizer=tokenizer, sp_model=sp_model)
 
   @property
