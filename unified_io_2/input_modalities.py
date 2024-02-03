@@ -65,8 +65,11 @@ class InputTextEmbedder(nn.Module):
     self.config = config
     cfg = config
 
-    self.register_buffer('pos_emb_cache', layers.get_1d_position_embedding(
-      cfg.text_pos_emb, cfg.encoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1))
+    self.register_buffer(
+      'pos_emb_cache',
+      layers.get_1d_position_embedding(
+        cfg.text_pos_emb, cfg.encoder_max_text_length, cfg.emb_dim, cfg.head_dim, True, 1),
+      persistent=False)
     if "llama_rope" in cfg.text_pos_emb:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
       if param_dict is not None:
