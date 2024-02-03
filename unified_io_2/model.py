@@ -200,9 +200,6 @@ class Decoder(nn.Module, GenerationMixin):
 
   main_input_name = "input_ids"
 
-  def can_generate(self):
-    return True
-
   def __init__(self, config: T5Config, param_dict=None):
     super().__init__()
     self.config = config
@@ -339,6 +336,13 @@ class Decoder(nn.Module, GenerationMixin):
       attn_pattern_mask=seq.attn_pattern_mask,
       logit_weights=logit_weights
     )
+
+  def can_generate(self):
+    return True
+
+  @property
+  def device(self):
+    return self.decoder_norm.scale.device
 
   def _update_model_kwargs_for_generation(
         self,
