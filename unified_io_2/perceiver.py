@@ -7,19 +7,17 @@ from unified_io_2 import layers
 
 
 class CrossAttention(nn.Module):
-  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig], droppath_rate: float = 0.0, param_dict=None):
+  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig], droppath_rate: float = 0.0):
     """Cross-attention layer."""
     super().__init__()
     self.config = config
     self.pre_xattention_norm = layers.RMSNorm(config.emb_dim)
-    attn_dict = None if param_dict is None else param_dict['xattention']
     self.xattention = layers.MultiHeadDotProductAttention(
       emb_dim=config.emb_dim,
       num_heads=config.num_heads,
       head_dim=config.head_dim,
       dropout_rate=config.dropout_rate,
       dropout_broadcast_dims=config.dropout_broadcast_dims,
-      param_dict=attn_dict,
       float32_logits=config.float32_attention_logits,
       qk_norm=config.xattn_qk_norm,
       clip_attn_logit=config.clip_attn_logit,
@@ -28,22 +26,14 @@ class CrossAttention(nn.Module):
     self.dropout = layers.Dropout(p=config.dropout_rate, broadcast_dims=config.dropout_broadcast_dims)
     self.post_xattn_droppath = layers.DropPath(droppath_rate)
     self.pre_mlp_norm = layers.RMSNorm(config.emb_dim)
-    mlp_dict = None if param_dict is None else param_dict['mlp']
     self.mlp = layers.MlpBlock(
       emb_dim=config.emb_dim,
       intermediate_dim=config.mlp_dim,
       activations=config.mlp_activations,
-      param_dict=mlp_dict,
       intermediate_dropout_rate=config.dropout_rate,
       dropout_broadcast_dims=config.dropout_broadcast_dims,
     )
     self.post_mlp_droppath = layers.DropPath(droppath_rate)
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.pre_xattention_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_xattention_layer_norm']['scale']))
-        self.pre_mlp_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_mlp_layer_norm']['scale']))
 
   def __call__(self, latents, context, mask=None):
     # Cross attention block.
@@ -76,19 +66,17 @@ class CrossAttention(nn.Module):
 
 
 class Attention(nn.Module):
-  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig], droppath_rate: float = 0.0, param_dict=None):
+  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig], droppath_rate: float = 0.0):
     """Self-attention layer."""
     super().__init__()
     self.config = config
     self.pre_attention_norm = layers.RMSNorm(config.emb_dim)
-    attn_dict = None if param_dict is None else param_dict['attention']
     self.attention = layers.MultiHeadDotProductAttention(
       emb_dim=config.emb_dim,
       num_heads=config.num_heads,
       head_dim=config.head_dim,
       dropout_rage=config.dropout_rate,
       dropout_broadcast_dims=config.dropout_broadcast_dims,
-      param_dict=attn_dict,
       float32_logits=config.float32_attention_logits,
       qk_norm=config.attn_qk_norm,
       clip_attn_logit=config.clip_attn_logit,
@@ -97,22 +85,14 @@ class Attention(nn.Module):
     self.dropout = layers.Dropout(p=config.dropout_rate, broadcast_dims=config.dropout_broadcast_dims)
     self.post_attn_droppath = layers.DropPath(droppath_rate)
     self.pre_mlp_norm = layers.RMSNorm(config.emb_dim)
-    mlp_dict = None if param_dict is None else param_dict['mlp']
     self.mlp = layers.MlpBlock(
       emb_dim=config.emb_dim,
       intermediate_dim=config.mlp_dim,
       activations=config.mlp_activations,
-      param_dict=mlp_dict,
       intermediate_dropout_rate=config.dropout_rate,
       dropout_broadcast_dims=config.dropout_broadcast_dims,
     )
     self.post_mlp_droppath = layers.DropPath(droppath_rate)
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.pre_attention_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_attention_layer_norm']['scale']))
-        self.pre_mlp_norm.scale.data.copy_(torch.from_numpy(param_dict['pre_mlp_layer_norm']['scale']))
 
   def __call__(self, latents, mask=None):
     # Self-attention block.
@@ -139,7 +119,7 @@ class Attention(nn.Module):
 
 
 class PerceiverResampler(nn.Module):
-  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig], param_dict=None) -> None:
+  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig]) -> None:
     super().__init__()
     """Perceiver resampler: a stack of cross-attention layers."""
     self.config = config
@@ -152,18 +132,10 @@ class PerceiverResampler(nn.Module):
 
     dpr = [x.item() for x in torch.linspace(0, config.droppath_rate, config.num_layers)]
     for lyr in range(config.num_layers):
-      layer_dict_i = None if param_dict is None else param_dict[f'layers_{lyr}']
       if lyr in config.xattention_index:
-        self.add_module(f'layers_{lyr}', CrossAttention(config, droppath_rate=dpr[lyr], param_dict=layer_dict_i))
+        self.add_module(f'layers_{lyr}', CrossAttention(config, droppath_rate=dpr[lyr]))
       else:
-        self.add_module(f'layers_{lyr}', Attention(config, droppath_rate=dpr[lyr], param_dict=layer_dict_i))
-
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.latents.data.copy_(torch.from_numpy(param_dict['resampler_latents']))
-        self.context_norm.scale.data.copy_(torch.from_numpy(param_dict['context_norm']['scale']))
-        self.perceiver_norm.scale.data.copy_(torch.from_numpy(param_dict['perceiver_norm']['scale']))
+        self.add_module(f'layers_{lyr}', Attention(config, droppath_rate=dpr[lyr]))
 
   def __call__(self, embed, *, mask=None):
     bs, seq_len, dim = embed.shape
@@ -193,10 +165,10 @@ class PerceiverResampler(nn.Module):
 
 
 class Resampler(nn.Module):
-  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig], param_dict=None) -> None:
+  def __init__(self, config: Union[ImageResamplerConfig, AudioResamplerConfig]) -> None:
     super().__init__()
     self.config = config
-    self.perceiver = PerceiverResampler(config, param_dict)
+    self.perceiver = PerceiverResampler(config)
     
     """Perceiver resampler: a stack of cross-attention layers."""
   def __call__(self, embed, *, mask=None):
@@ -205,10 +177,7 @@ class Resampler(nn.Module):
 
 
 if __name__ == "__main__":
-  print("Loading uio2-large-2M ckpt...")
   import numpy as np
-  ckpt_file = "/home/sanghol/projects/unified-io-2/checkpoints/unified-io-2_large_instructional_tunning_2M.npz"
-  param_dict = np.load(ckpt_file, allow_pickle=True)['input_encoders_image_history'].item()['resampler']['PerceiverResampler_0']
 
   print("Dummy input...")
   bs = 1
@@ -228,9 +197,9 @@ if __name__ == "__main__":
     'mask': np.ones((bs * nframes, audio_len), dtype=np.int32),
   }
 
-  print("Building and Initiazling pytorch perceiver resampler...")
+  print("Building pytorch perceiver resampler...")
   pytorch_resampler_cfg = ImageResamplerConfig()
-  pytorch_resampler = Resampler(pytorch_resampler_cfg, param_dict)
+  pytorch_resampler = Resampler(pytorch_resampler_cfg)
   pytorch_resampler.eval()
 
   print('Doing inference...')

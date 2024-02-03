@@ -7,19 +7,12 @@ from unified_io_2 import layers
 
 
 class MLP(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
     self.fc1 = nn.Linear(config.emb_dim, config.mlp_dim, bias=True)
     self.gelu = nn.GELU(approximate='tanh') # The uio2 jax code used the tanh approximation.
     self.fc2 = nn.Linear(config.mlp_dim, config.emb_dim, bias=True)
-
-    if param_dict is not None:
-      with torch.no_grad():
-        self.fc1.weight.data.copy_(torch.from_numpy(param_dict['fc1']['kernel']).transpose(0, 1))
-        self.fc1.bias.data.copy_(torch.from_numpy(param_dict['fc1']['bias']))
-        self.fc2.weight.data.copy_(torch.from_numpy(param_dict['fc2']['kernel']).transpose(0, 1))
-        self.fc2.bias.data.copy_(torch.from_numpy(param_dict['fc2']['bias']))
   
   def forward(self, x):
     x = self.fc1(x)
@@ -35,7 +28,6 @@ class MultiHeadDotProductAttention(nn.Module):
       num_heads: int,
       head_dim: int,
       dropout_rate: float = 0.,
-      param_dict: Any = None,
       float32_logits: bool = False  # computes logits in float32 for stability.
   ):
     super().__init__()
@@ -55,17 +47,6 @@ class MultiHeadDotProductAttention(nn.Module):
 
     self.attn_drop = layers.Dropout(dropout_rate, broadcast_dims=(-2, ))
     self.out_proj = nn.Linear(emb_dim, emb_dim, bias=True)
-
-    if param_dict is not None:
-      with torch.no_grad():
-        self.query_in_proj_weight.data.copy_(torch.from_numpy(param_dict['query']['kernel']).transpose(0, 1))
-        self.query_in_proj_bias.data.copy_(torch.from_numpy(param_dict['query']['bias']))
-        self.key_in_proj_weight.data.copy_(torch.from_numpy(param_dict['key']['kernel']).transpose(0, 1))
-        self.key_in_proj_bias.data.copy_(torch.from_numpy(param_dict['key']['bias']))
-        self.value_in_proj_weight.data.copy_(torch.from_numpy(param_dict['value']['kernel']).transpose(0, 1))
-        self.value_in_proj_bias.data.copy_(torch.from_numpy(param_dict['value']['bias']))
-        self.out_proj.weight.data.copy_(torch.from_numpy(param_dict['out']['kernel']).transpose(0, 1))
-        self.out_proj.bias.data.copy_(torch.from_numpy(param_dict['out']['bias']))
   
   def forward(self, inputs_q, inputs_kv, attn_mask: Optional[torch.Tensor] = None):
     # inputs_q: [batch_size, len_q, emb_dim]
@@ -112,7 +93,7 @@ class MultiHeadDotProductAttention(nn.Module):
 
 
 class ResidualAttentionBlock(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
     self.ln_1 = layers.LayerNorm(config.emb_dim, eps=1e-6)
@@ -121,19 +102,11 @@ class ResidualAttentionBlock(nn.Module):
         config.num_heads,
         config.head_dim,
         config.dropout_rate,
-        param_dict=None if param_dict is None else param_dict['MultiHeadDotProductAttention_0']
         # The uio2 jax code did not use this parameter.
         # float32_logits=config.float32_attention_logits
     )
     self.ln_2 = layers.LayerNorm(config.emb_dim, eps=1e-6)
-    self.mlp = MLP(config, param_dict=None if param_dict is None else param_dict['MLP_0'])
-
-    if param_dict is not None:
-      with torch.no_grad():
-        self.ln_1.weight.data.copy_(torch.from_numpy(param_dict['norm1']['scale']))
-        self.ln_1.bias.data.copy_(torch.from_numpy(param_dict['norm1']['bias']))
-        self.ln_2.weight.data.copy_(torch.from_numpy(param_dict['norm2']['scale']))
-        self.ln_2.bias.data.copy_(torch.from_numpy(param_dict['norm2']['bias']))
+    self.mlp = MLP(config)
   
   def forward(self, x, attn_mask):
     x1 = self.ln_1(x)
@@ -146,14 +119,13 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
     self.num_layers = config.num_layers
     resblocks = []
     for i in range(config.num_layers):
-      resblocks_dict_i = None if param_dict is None else param_dict[f'ResidualAttentionBlock_{str(i)}']
-      resblocks.append(ResidualAttentionBlock(config, resblocks_dict_i))
+      resblocks.append(ResidualAttentionBlock(config))
     self.resblocks = nn.ModuleList(resblocks)
   
   def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
@@ -170,7 +142,7 @@ def _expand_token(token, batch_size: int):
 
 
 class VisionTransformer(nn.Module):
-  def __init__(self, config, param_dict=None):
+  def __init__(self, config):
     super().__init__()
     self.config = config
 
@@ -179,16 +151,7 @@ class VisionTransformer(nn.Module):
     self.cls_token = nn.Parameter(torch.zeros(config.emb_dim))
     self.dist_token = nn.Parameter(torch.zeros(config.emb_dim))
     self.positional_embedding = nn.Parameter(torch.zeros(514, config.emb_dim))
-    transformer_dict = None if param_dict is None else param_dict['Transformer_0']
-    self.transformer = Transformer(config, param_dict=transformer_dict)
-    # weight initialization
-    if param_dict is not None:
-      with torch.no_grad():
-        self.embedding.weight.data.copy_(torch.from_numpy(param_dict['embedding']['kernel']).transpose(0, 1))
-        self.embedding.bias.data.copy_(torch.from_numpy(param_dict['embedding']['bias']))
-        self.cls_token.data.copy_(torch.from_numpy(param_dict['cls_token']))
-        self.dist_token.data.copy_(torch.from_numpy(param_dict['dist_token']))
-        self.positional_embedding.data.copy_(torch.from_numpy(param_dict['pos_embed']))
+    self.transformer = Transformer(config)
 
   def add_pos_emb(self, x, pos_ids):
     cls_emb = self.positional_embedding[0]
@@ -247,10 +210,10 @@ def transpose_input(pos_ids, input_size, patch_size):
 
 class AudioFeature(nn.Module):
   """Image features"""
-  def __init__(self, config, param_dict=None) -> None:
+  def __init__(self, config) -> None:
     super().__init__()
     self.config = config
-    self.vision_transformer = VisionTransformer(config, param_dict['vision_transformer'])
+    self.vision_transformer = VisionTransformer(config)
 
   def __call__(self, x, mask, pos_ids, *, patch_num: Any = (16, 8)):
     if self.config.transpose_input:
@@ -260,13 +223,9 @@ class AudioFeature(nn.Module):
 
 
 if __name__ == "__main__":
-  print("Loading uio2-large-2M ckpt...")
-  import numpy as np
-  ckpt_file = "checkpoints/unified-io-2_large_instructional_tunning_2M.npz"
-  param_dict = np.load(ckpt_file, allow_pickle=True)['input_audio_encoder'].item()['image_encoder']
-  print("Building and Initiazling pytorch ast...")
+  print("Building pytorch ast...")
   ast_cfg = AudioVitFeatureConfig()
-  audio_encoder = AudioFeature(ast_cfg, param_dict)
+  audio_encoder = AudioFeature(ast_cfg)
   audio_encoder.eval()
   print("Dummy input...")
   len = 128 # 256 / 16 * 128 / 16

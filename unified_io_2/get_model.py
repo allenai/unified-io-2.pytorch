@@ -37,45 +37,37 @@ def get_input_modalities(
     freeze_vit=False,
     use_image_history_vit = False,
     use_audio_history_vit = False,
-    npy_ckpt=None,
 ) -> Dict[str, ModalityEncoder]:
   """Returns the ModalityEncoder for the input modalities"""
 
   out = dict()
   if 'text' in input_modality:
-    param_dict = None if npy_ckpt is None else npy_ckpt['input_text_encoder'].item()
-    out["text"] = InputTextEncoder(param_dict=param_dict)
+    out["text"] = InputTextEncoder()
 
   image_encoder = None
   if "image" in input_modality or "image_history" in input_modality:
     if use_image_vit or use_image_history_vit:
-      param_dict = None if npy_ckpt is None else npy_ckpt['input_image_encoder'].item()['image_encoder']
-      image_encoder = ImageFeature(image_vit_cfg, param_dict=param_dict)
+      image_encoder = ImageFeature(image_vit_cfg)
 
   audio_encoder = None
   if "audio" in input_modality or "audio_history" in input_modality:
     if use_audio_vit or use_audio_history_vit:
-      param_dict = None if npy_ckpt is None else npy_ckpt['input_audio_encoder'].item()['image_encoder']
-      audio_encoder = AudioFeature(audio_vit_cfg, param_dict=param_dict)
+      audio_encoder = AudioFeature(audio_vit_cfg)
 
   if 'image' in input_modality:
-    param_dict = None if npy_ckpt is None else npy_ckpt['input_image_encoder'].item()
     out["image"] = InputImageViTEncoder(
-      image_encoder if use_image_vit else None, use_image_vit, freeze_vit, param_dict=param_dict)
+      image_encoder if use_image_vit else None, use_image_vit, freeze_vit)
 
   if 'image_history' in input_modality:
-    param_dict = None if npy_ckpt is None else npy_ckpt['input_encoders_image_history'].item()
     out["image_history"] = InputImageHistoryViTEncoder(
-      image_encoder if use_image_history_vit else None, image_history_cfg, param_dict=param_dict)
+      image_encoder if use_image_history_vit else None, image_history_cfg)
 
   if 'audio' in input_modality:
-    param_dict = None if npy_ckpt is None else npy_ckpt['input_audio_encoder'].item()
-    out["audio"] = InputAudioViTEncoder(audio_encoder if use_audio_vit else None, use_audio_vit, freeze_vit, param_dict=param_dict)
+    out["audio"] = InputAudioViTEncoder(audio_encoder if use_audio_vit else None, use_audio_vit, freeze_vit)
 
   if 'audio_history' in input_modality:
-    param_dict = None if npy_ckpt is None else npy_ckpt['input_encoders_audio_history'].item()
     out["audio_history"] = InputAudioHistoryViTEncoder(
-      audio_encoder if use_audio_history_vit else None, audio_history_cfg, param_dict=param_dict)
+      audio_encoder if use_audio_history_vit else None, audio_history_cfg)
   return out
 
 
@@ -83,14 +75,12 @@ def get_target_modalities(
     target_modality=tuple(config.TARGET_MODALITIES),
     image_vae_config: ImageViTVQGANConfig=VAEConfig(),
     audio_vae_config: AudioViTVQGANConfig=AudioViTVQGANConfig(),
-    npy_ckpt=None,
 ) -> Dict[str, ModalityEncoder]:
   """Return the encoders to use for target modalities"""
 
   out = {}
   if 'text' in target_modality:
-    param_dict = None if npy_ckpt is None else npy_ckpt['target_encoders_text'].item()
-    out['text'] = TargetTextEncoder(param_dict=param_dict)
+    out['text'] = TargetTextEncoder()
   if 'image' in target_modality:
     out['image'] = TargetImageDVAEEmbedder(image_vae_config)
   if 'audio' in target_modality:
@@ -98,37 +88,38 @@ def get_target_modalities(
   return out
 
 
-def get_model(config: Config, tokenizer_path, npy_ckpt=None) -> Tuple[UnifiedIOPreprocessing, UnifiedIO]:
+def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, UnifiedIO]:
   input_encoders = get_input_modalities(
     config.input_modalities, config.image_vit_cfg, config.audio_vit_cfg,
     config.image_history_cfg, config.audio_history_cfg, config.use_image_vit, config.use_audio_vit,
-    config.freeze_vit, config.use_image_history_vit, config.use_audio_history_vit, npy_ckpt,
+    config.freeze_vit, config.use_image_history_vit, config.use_audio_history_vit,
   )
   target_encoders = get_target_modalities(
-    config.target_modalities, config.image_vae, config.audio_vae, npy_ckpt)
+    config.target_modalities, config.image_vae, config.audio_vae)
   tokenizer = get_tokenizer(tokenizer_path)
   preprocessor = UnifiedIOPreprocessing(
     input_encoders, target_encoders, config.sequence_length, tokenizer)
-  model = UnifiedIO(config.t5_config, input_encoders, target_encoders, npy_ckpt=npy_ckpt)
+  model = UnifiedIO(config.t5_config, input_encoders, target_encoders)
   return preprocessor, model
 
 
 if __name__ == "__main__":
-  import numpy as np
   import torch
-  print("Loading uio2-large-3M ckpt...")
-  npy_ckpt = np.load('/home/sanghol/projects/unified-io-2.pytorch/checkpoints/unified-io-2_large_instructional_tunning_3M.npz', allow_pickle=True)
-  print("Building and Initiazling pytorch uio2-large-3M, all modalities to text...")
-  model_config = config.LARGE
+  print("Building and Initiazling pytorch uio2-xxl-3M, all modalities to text...")
+  model_config = config.XXL
   model_config.target_modalities = tuple(['text'])
   input_encoders = get_input_modalities(
     model_config.input_modalities, model_config.image_vit_cfg, model_config.audio_vit_cfg,
     model_config.image_history_cfg, model_config.audio_history_cfg, model_config.use_image_vit, model_config.use_audio_vit,
-    model_config.freeze_vit, model_config.use_image_history_vit, model_config.use_audio_history_vit, npy_ckpt,
+    model_config.freeze_vit, model_config.use_image_history_vit, model_config.use_audio_history_vit,
   )
   target_encoders = get_target_modalities(
-    model_config.target_modalities, model_config.image_vae, model_config.audio_vae, npy_ckpt)
-  model = UnifiedIO(model_config.t5_config, input_encoders, target_encoders, npy_ckpt=npy_ckpt)
+    model_config.target_modalities, model_config.image_vae, model_config.audio_vae)
+  model = UnifiedIO(model_config.t5_config, input_encoders, target_encoders)
+  model.load_state_dict(torch.load("/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-text.pth"))
+  model.eval()
 
-  print("Saving it as a pytorch ckpt file...")
-  torch.save(model.state_dict(), "/home/sanghol/projects/unified-io-2.pytorch/checkpoints/large-3m-all-text.pth")
+  import pdb; pdb.set_trace()
+
+  # print("Saving it as a pytorch ckpt file...")
+  # torch.save(model.state_dict(), "/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-text.pth")
