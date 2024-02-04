@@ -193,7 +193,7 @@ def concat_sequences(seqs: List, seq_lens: Optional[List[int]]=None):
     if len(shape) == 4:
       out[k] = seq_seq_concat(args)
     else:
-      out[k] = torch.concat(args)
+      out[k] = torch.concat(args, dim=1)
 
   if isinstance(seqs[0], InputSequence):
     return InputSequence(**out)

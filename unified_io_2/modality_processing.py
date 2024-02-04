@@ -80,7 +80,7 @@ class UnifiedIOPreprocessing:
     if box_inputs:
       boxes = np.asarray(box_inputs, dtype=np.float32)[None, :]
     else:
-      boxes = None, None
+      boxes = None
 
     if video_inputs:
       if encode_frame_as_image is None:

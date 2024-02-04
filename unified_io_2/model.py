@@ -263,6 +263,7 @@ class Decoder(nn.Module, GenerationMixin):
       return CausalLMOutputWithPast(
         logits=logits,
         hidden_states=y if output_hidden_states else None,
+        past_key_values=past_key_values
       )
     else:
       return y
@@ -272,7 +273,7 @@ class Decoder(nn.Module, GenerationMixin):
       embed_token_id, logit_weights, past_key_values=None
   ):
     cfg = self.config
-    cur_index = input_ids.shape[1]
+    cur_index = input_ids.shape[1] - 1
     if use_cache:
       # Embed just the most recently generated tokens
       input_ids = input_ids[:, -1:]
@@ -282,11 +283,13 @@ class Decoder(nn.Module, GenerationMixin):
         torch.ones(seq.input_embedding.shape[:2], device=seq.input_embedding.device),
         encoder_mask
       )
+      decoder_attn_mask = None
     else:
       # Embeds all the tokens
       seq = embed_token_id(input_ids, mask=torch.ones_like(input_ids, dtype=torch.int32))
       encoder_decoder_mask = layers.make_attention_mask(
         seq.mask, encoder_mask).to(cfg.dtype)
+      decoder_attn_mask = layers.make_decoder_mask(seq.mask)
 
     if use_cache:
       if past_key_values is None:
@@ -299,7 +302,7 @@ class Decoder(nn.Module, GenerationMixin):
       encoded=encoded,
       decoder_embedding=seq.input_embedding,
       decoder_pos_emb=seq.position_embed,
-      decoder_attn_mask=None,
+      decoder_attn_mask=decoder_attn_mask,
       encoder_pos_emb=encoder_pos_emb,
       encoder_decoder_mask=encoder_decoder_mask,
       attn_pattern_mask=seq.attn_pattern_mask,

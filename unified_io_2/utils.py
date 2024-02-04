@@ -23,7 +23,7 @@ def flatten_dict(d, sep="/"):
   def _fn(part, prefix):
     if isinstance(part, dict):
         for k, v in part.items():
-            _fn(v, k + sep + prefix)
+            _fn(v, prefix + sep + k)
     else:
         _out[prefix] = part
   _fn(d, prefix="")
@@ -33,7 +33,7 @@ def flatten_dict(d, sep="/"):
 def unflatten_dict(d, sep='/'):
   out = {}
   for k, v in d.items():
-    parts = k.split(sep)
+    parts = k.lstrip(sep).split(sep)
     k_out = out
     for key in parts[:-1]:
       if key not in k_out:

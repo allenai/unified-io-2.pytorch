@@ -103,24 +103,19 @@ class InputTextEncoder(ModalityEncoder):
     if features.get(f"text_inputs") is None:
       return {"tokens": tf.zeros([0], dtype=tf.int32)}
     else:
-      text_input_len = sequence_length[f"text_inputs"]
+      max_len = sequence_length[f"text_inputs"]
       text_inputs = features[f"text_inputs"]
       if isinstance(text_inputs, str) or text_inputs.dtype == tf.dtypes.string:
         text_inputs = vocab.encode_tf(text_inputs)
-      text_inputs = text_inputs[:text_input_len-1]  # Make sure the EOS wouldn't get truncated
+      text_inputs = text_inputs[:max_len-1]
       text_inputs = tf.pad(text_inputs, paddings=[[0, 1]], constant_values=config.EOS_ID)
       return {"tokens": text_inputs}
 
   def convert_inputs(self, features, sequence_length) -> Dict:
-    text_len = sequence_length.get("text_inputs")
-    if text_len is None:
-      text_len = sequence_length["inputs/text/tokens"]
     inputs = features["tokens"]
-    inputs = tf.pad(inputs, [[0, text_len - tf.shape(inputs)[0]]], constant_values=config.PAD_ID)
-    inputs = tf.ensure_shape(inputs, [text_len])
     return {
       "tokens": inputs,
-      "pos_ids": tf.range(text_len, dtype=tf.int32),
+      "pos_ids": tf.range(tf.shape(inputs)[0], dtype=tf.int32),
       "mask": tf.cast(inputs != config.PAD_ID, tf.int32),
     }
 
@@ -167,12 +162,12 @@ class ViTImageEmbedder(nn.Module):
         cfg.emb_dim, 
         cfg.head_dim, 
         self.modality_idx, 
-        scale))
+        scale), persistent=False)
     
     if "llama_rope" in pos_emb_type:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
     
-  def __call__(self, input, pos_ids, mask, *, use_constraints=True):
+  def __call__(self, input, pos_ids, mask, shared_embed, use_constraints=True):
     cfg = self.t5_config
     bs = input.shape[0]
     pos_emb_type = cfg.image_pos_emb if "image" in self.modality else cfg.audio_pos_emb
@@ -212,7 +207,7 @@ class InputImageViTEncoder(ModalityEncoder):
     input_padding_size = np.array(image_input_size, dtype=np.int32) // IMAGE_INPUT_D
     n_patches = np.prod(input_padding_size)
 
-    image_samples = sequence_length['image_input_samples']
+    image_samples = sequence_length.get('image_input_samples', None)
     if image_samples is None:
       image_samples = n_patches
     if isinstance(image_samples, float):

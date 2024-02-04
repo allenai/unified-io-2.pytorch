@@ -568,8 +568,14 @@ class MultiHeadDotProductAttention(nn.Module):
       logit_scale = None
 
     if past_key_values is not None:
+      # The cache expects seq_dim to be the second-to-last-dim
+      key = torch.transpose(key, 1, 2)
+      value = torch.transpose(value, 1, 2)
       past_key_values.update(key, value, self.layer_idx)
       key, value = past_key_values[self.layer_idx]
+      key = torch.transpose(key, 1, 2)
+      value = torch.transpose(value, 1, 2)
+      assert attention_bias is None
 
     # Apply attention.
     x = dot_product_attention(

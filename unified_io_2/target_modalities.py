@@ -58,28 +58,6 @@ class TextEmbedder(nn.Module):
     )
 
 
-class BasicDecoder(nn.Module):
-
-  def __init__(self, vocab_size, config):
-    super().__init__()
-    self.vocab_size = vocab_size
-    self.config = config
-
-    cfg = self.config
-    if not cfg.logits_via_embedding:
-      self.logits_dense = nn.Linear(cfg.emb_dim, self.vocab_size, bias=False)
-      nn.init.trunc_normal_(self.logits_dense.weight, std=math.sqrt(1 / cfg.emb_dim), a=-2.0, b=2.0)
-
-  def __call__(self, x, shared_embed):
-    cfg = self.config
-    if cfg.logits_via_embedding:
-      logits = torch.matmul(x, shared_embed.weight.T)
-      logits = logits / np.sqrt(x.shape[-1])
-    else:
-      logits = self.logits_dense(x)
-    return logits
-
-
 class TargetTextEncoder(ModalityEncoder):
   """Tokenize and embed input text, handles multiple target texts"""
   def __init__(self):
@@ -102,19 +80,14 @@ class TargetTextEncoder(ModalityEncoder):
     else:
       if tf.shape(text_targets)[0] == 0 or text_targets[-1] != config.EOS_ID:
         text_targets = tf.pad(text_targets, paddings=[[0, 1]], constant_values=config.EOS_ID)
-      text_len = tf.shape(text_targets)[0]
-      position_ids = tf.range(text_len, dtype=tf.int32)
-      segment_ids = tf.ones((text_len,), dtype=tf.int32)
 
     return dict(
       tokens=text_targets,
-      pos_ids=position_ids,
-      segment_ids=segment_ids
     )
 
   def convert_inputs(self, features, sequence_length) -> Dict:
     # Support old style and new style sequence_lengths
-    text_len = sequence_length.get("text_targets")
+    text_len = tf.shape(features["tokens"])[0]
     if text_len is None:
       text_len = sequence_length["targets/text/tokens"]
     # vocab = get_default_vocabulary()
@@ -124,25 +97,17 @@ class TargetTextEncoder(ModalityEncoder):
       # since older versions did this too
       features[k] = trim_or_pad_tf(v, text_len, pad_constant=config.PAD_ID)
     tokens = features.pop("tokens")
+
     features["targets"] = tokens
-
     features["inputs"] = make_autoregressive_inputs(
-      tokens, sequence_id=features.get("segment_ids"), bos_id=config.BOS_ID
-    )
-
-    # remove the end token mask here, assume eos_id is larger than pad_id
-    if tf.math.reduce_sum(tokens) > config.EOS_ID:   # > 1
-      features["mask"] = tf.cast(tokens > config.PAD_ID, tf.int32)
-    else:
-      features["mask"] = tf.cast(tf.zeros(tokens.shape), tf.int32)
+      tokens, sequence_id=features.get("segment_ids"), bos_id=config.BOS_ID)
+    features["position_ids"] = tf.range(text_len, dtype=tf.int32)
+    features["segment_ids"] = tf.ones((text_len,), dtype=tf.int32)
+    features["mask"] = tf.cast(tokens > config.PAD_ID, tf.int32)
     return features
-
 
   def get_encoder(self, config: T5Config) -> nn.Module:
     return TextEmbedder(config)
-
-  def get_decoder(self, config: Config) -> nn.Module:
-    return BasicDecoder(config.vocab_size, config)
 
 
 class TargetImageDVAEEmbedder(ModalityEncoder):
@@ -223,9 +188,6 @@ class TargetImageDVAEEmbedder(ModalityEncoder):
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ImageViTVQGAN(config, self.config)
 
-  def get_decoder(self, config: T5Config, shared_embedding) -> nn.Module:
-    return BasicDecoder(config.image_vocab_size, config, shared_embedding)
-
 
 class ImageViTVQGAN(nn.Module):
   def __init__(self, config, vae_config, embedding_layer):
@@ -262,8 +224,6 @@ class TargetAudioDVAEEmbedder(ModalityEncoder):
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ImageViTVQGAN(config, self.config)
 
-  def get_decoder(self, config: T5Config, shared_embedding) -> nn.Module:
-    return BasicDecoder(config.image_vocab_size, config, shared_embedding)
   def preprocess_inputs(
       self, features: Dict, sequence_length) -> Optional[Dict[str, tf.Tensor]]:
 
