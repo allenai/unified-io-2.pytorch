@@ -183,11 +183,11 @@ def pad_to_bounding_box_internal(image, offset_height, offset_width,
 
     # Do not pad on the depth dimensions.
     paddings = array_ops.reshape(
-      array_ops.stack([
+      tf.stack([
         0, 0, offset_height, after_padding_height, offset_width,
         after_padding_width, 0, 0
       ]), [4, 2])
-    padded = array_ops.pad(image, paddings, constant_values=value)
+    padded = tf.pad(image, paddings, constant_values=value)
 
     padded_shape = [
       None if _is_tensor(i) else i
