@@ -5,7 +5,7 @@ from typing import Any, Optional, Tuple, List
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from transformers import GenerationMixin, Cache, LlamaModel, DynamicCache
+from transformers import GenerationMixin, Cache, LlamaModel, DynamicCache, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from unified_io_2.config import Config, T5Config
@@ -188,6 +188,13 @@ class Decoder(nn.Module, GenerationMixin):
 
     self.decoder_norm = layers.RMSNorm(config.emb_dim)
     self.drop = layers.Dropout(p=config.dropout_rate, broadcast_dims=(-2,))
+    self.generation_config = GenerationConfig(
+      bos_token_id=0,
+      eos_token_id=1,
+      # We generally use 0 for padding, but having pad==bos triggesrs a superfluous
+      # warning from GenerationMixin so we just tell it to use 1 to keep it quiet
+      pad_token_id=1
+    )
 
   def __call__(
     self,
@@ -206,8 +213,10 @@ class Decoder(nn.Module, GenerationMixin):
     return_dict=False,
     output_attentions=False,
     output_hidden_states=False,
-    logit_weights=None
+    logit_weights=None,
   ):
+    if output_attentions:
+      raise NotImplementedError()
 
     cfg = self.config
     assert decoder_embedding.ndim == 3  # [batch, len]
@@ -270,9 +279,10 @@ class Decoder(nn.Module, GenerationMixin):
 
   def prepare_inputs_for_generation(
       self, input_ids, encoder_pos_emb, encoded, encoder_mask, modality, use_cache,
-      embed_token_id, logit_weights, past_key_values=None
+      embed_token_id, logit_weights, past_key_values=None, attention_mask=None
   ):
     cfg = self.config
+    device = input_ids.device
     cur_index = input_ids.shape[1] - 1
     if use_cache:
       # Embed just the most recently generated tokens
@@ -280,13 +290,14 @@ class Decoder(nn.Module, GenerationMixin):
       seq = embed_token_id(
         input_ids, mask=torch.ones_like(input_ids, dtype=torch.int32), cur_index=cur_index)
       encoder_decoder_mask = layers.make_attention_mask(
-        torch.ones(seq.input_embedding.shape[:2], device=seq.input_embedding.device),
+        torch.ones(seq.input_embedding.shape[:2], device=device),
         encoder_mask
       )
       decoder_attn_mask = None
     else:
       # Embeds all the tokens
-      seq = embed_token_id(input_ids, mask=torch.ones_like(input_ids, dtype=torch.int32))
+      seq = embed_token_id(
+        input_ids, mask=torch.ones_like(input_ids, dtype=torch.int32, device=device))
       encoder_decoder_mask = layers.make_attention_mask(
         seq.mask, encoder_mask).to(cfg.dtype)
       decoder_attn_mask = layers.make_decoder_mask(seq.mask)
@@ -306,7 +317,7 @@ class Decoder(nn.Module, GenerationMixin):
       encoder_pos_emb=encoder_pos_emb,
       encoder_decoder_mask=encoder_decoder_mask,
       attn_pattern_mask=seq.attn_pattern_mask,
-      logit_weights=logit_weights
+      logit_weights=logit_weights,
     )
 
   def can_generate(self):
@@ -315,19 +326,6 @@ class Decoder(nn.Module, GenerationMixin):
   @property
   def device(self):
     return self.decoder_norm.scale.device
-
-  def _update_model_kwargs_for_generation(
-        self,
-        outputs,
-        model_kwargs,
-        is_encoder_decoder: bool = False,
-        standardize_cache_format: bool = False
-  ):
-    if "cur_index" in model_kwargs:
-      model_kwargs["cur_index"] += 1
-    return super()._update_model_kwargs_for_generation(
-      outputs, model_kwargs, is_encoder_decoder, standardize_cache_format
-    )
 
   def _reorder_cache(self, past_key_values, beam_idx):
     raise ValueError()
@@ -374,15 +372,16 @@ class UnifiedIO(nn.Module, GenerationMixin):
     self.encoder = Encoder(cfg)
     self.decoder = Decoder(cfg)
 
+  @torch.no_grad()
   def generate(
       self,
+      batch,
+      modality="text",
       **kwargs,
   ):
-    batch = kwargs.pop("batch")
     batch = unflatten_dict(batch)
     input_seq = self.encode_batch(batch["inputs"], False)
     encoder_hidden = self.encoder(input_seq)
-    modality = kwargs["modality"]
 
     bs = input_seq.batch_size
     input_ids = torch.zeros((bs, 1), dtype=torch.long, device=input_seq.embed.device)
@@ -393,12 +392,13 @@ class UnifiedIO(nn.Module, GenerationMixin):
 
     return self.decoder.generate(
       **kwargs,
+      modality=modality,
       input_ids=input_ids,
       logit_weights=self.shared_embedding[modality].weight,
       embed_token_id=embed_token_id,
       encoder_pos_emb=input_seq.position_embed,
       encoded=encoder_hidden,
-      encoder_mask=input_seq.mask
+      encoder_mask=input_seq.mask,
     )
 
   def encode_batch(self, input_features, horizontally_pack_inputs):

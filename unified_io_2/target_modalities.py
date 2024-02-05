@@ -41,10 +41,11 @@ class TextEmbedder(nn.Module):
         pos_ids = torch.full_like(inputs, cur_index)
       else:
         pos_ids = torch.arange(inputs.shape[1], dtype=torch.int32, device=inputs.device)[None, ...]
+        pos_ids = pos_ids.expand(bs, inputs.shape[1])
 
     x = shared_embed(inputs)
 
-    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs, dtype=pos_ids.dtype, device=pos_ids.device)[:, None], pos_ids]
+    pos_emb = self.pos_emb_cache[pos_ids]
 
     if "llama_rope" in cfg.text_pos_emb:
       x += self.modality_embedding[None, None, :].to(x.dtype)

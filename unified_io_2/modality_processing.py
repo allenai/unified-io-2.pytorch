@@ -24,6 +24,13 @@ def build_spectogram(audio):
 
 
 class UnifiedIOPreprocessing:
+
+  PREFIXES = {
+    "text": "[Text] [S] ",
+    "audio": "[Audio] [S] ",
+    "image": "[Image] [S] "
+  }
+
   def __init__(
       self,
       input_encoders,
@@ -42,19 +49,20 @@ class UnifiedIOPreprocessing:
     except ImportError:
       raise ImportError("Loading images require PIL to be installed")
     with Image.open(image) as img:
-      return np.array(img)
+      return np.array(img.convert('RGB'))
 
   def __call__(
-      self, text_inputs,
+      self, text_inputs, target_modality,
       box_inputs=None, text_targets=None,
       image_inputs=None, audio_inputs=None, video_inputs=None,
       audio_history_inputs=None, image_targets=None, audio_targets=None,
-      choices=None, is_training=False, encode_frame_as_image=-1
+      choices=None, is_training=False, encode_frame_as_image=-1,
   ):
     """General pre-processing function
 
     Args:
       text_inputs: String text inputs, excludes the prefix modality token
+      target_modality: image, audio or text, the target output modalitiye
       box_input: [y1, x1, y2, x2] pixel coordinates relative to image_inputs, this box
                  will be tokenized and replace the keyword ``{box_input}` in text_inputs
       text_targets: int32 array tokenized of text inputs (without EOS) or
@@ -76,6 +84,8 @@ class UnifiedIOPreprocessing:
     targets = [image_targets, audio_targets, text_targets]
     assert sum(x is not None for x in targets) <= 1, "Can have at most one target"
     features = {}
+
+    text_inputs = self.PREFIXES[target_modality] + text_inputs
 
     if box_inputs:
       boxes = np.asarray(box_inputs, dtype=np.float32)[None, :]

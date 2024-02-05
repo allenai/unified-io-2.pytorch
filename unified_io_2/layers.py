@@ -286,7 +286,7 @@ def make_attention_mask(query_input: torch.Tensor,
 def make_decoder_mask(token_mask,
                       decoder_segment_ids=None):
   # Casual mask
-  idxs = torch.arange(token_mask.shape[1], dtype=torch.int32)
+  idxs = torch.arange(token_mask.shape[1], dtype=torch.int32, device=token_mask.device)
   mask = idxs[None, :] <= idxs[:, None]
   mask = mask[None, :, :]
 
@@ -300,7 +300,7 @@ def make_decoder_mask(token_mask,
     segment_mask = decoder_segment_ids[:, None, :] == decoder_segment_ids[:, :, None,]
     mask = torch.logical_and(mask,  segment_mask)
 
-  mask = mask[None, :, :, :]  # head dim
+  mask = mask[:, None, :, :]  # head dim
   return mask
 
 

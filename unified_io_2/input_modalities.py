@@ -86,7 +86,7 @@ class InputTextEmbedder(nn.Module):
 
     x = shared_embed(tokens.to(torch.int32))
 
-    pos_emb = self.pos_emb_cache[None, :, :][torch.arange(bs, dtype=pos_ids.dtype, device=pos_ids.device)[:, None], pos_ids]
+    pos_emb = self.pos_emb_cache[pos_ids]
 
     if "llama_rope" in cfg.text_pos_emb:
       x += self.modality_embedding[None, None, :].to(x.dtype)
@@ -185,7 +185,7 @@ class ViTImageEmbedder(nn.Module):
     # projecting the features.
     x = self.projection(x)
 
-    pos_emb = self.pos_emb_cache[None,:,:][torch.arange(bs, dtype=pos_ids.dtype, device=pos_ids.device)[:, None], pos_ids]
+    pos_emb = self.pos_emb_cache[pos_ids]
 
     if "llama_rope" in pos_emb_type:
       x += self.modality_embedding[None, None, :].to(x.dtype)

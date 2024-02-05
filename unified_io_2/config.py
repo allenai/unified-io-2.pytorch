@@ -1,13 +1,7 @@
-import dataclasses
-import json
-from copy import deepcopy
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Sequence, Optional, List, Union
 
 import torch
-# import torch
-from typing_extensions import Self
 import math
 
 from unified_io_2.vocabulary import SentencePieceVocabulary
