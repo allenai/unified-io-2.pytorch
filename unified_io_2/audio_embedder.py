@@ -217,7 +217,7 @@ class AudioFeature(nn.Module):
     self.config = config
     self.vision_transformer = VisionTransformer(config)
 
-  def __call__(self, x, mask, pos_ids, *, patch_num: Any = (16, 8)):
+  def forward(self, x, mask, pos_ids, *, patch_num: Any = (16, 8)):
     if self.config.transpose_input:
       pos_ids = transpose_input(pos_ids, self.config.default_input_size, self.config.patch_size)
     x, x1 = self.vision_transformer(x, mask, pos_ids)

@@ -5,7 +5,7 @@ from transformers import LlamaTokenizer
 from unified_io_2 import config
 from unified_io_2.audio_embedder import AudioFeature
 from unified_io_2.config import ImageVitFeatureConfig, AudioVitFeatureConfig, ImageResamplerConfig, \
-  AudioResamplerConfig, Config, ImageViTVQGANConfig, AudioViTVQGANConfig, VAEConfig, get_tokenizer
+  AudioResamplerConfig, Config, ImageViTVQGANConfig, AudioViTVQGANConfig, VQGANConfig, get_tokenizer
 from unified_io_2.input_modalities import InputImageViTEncoder, InputImageHistoryViTEncoder, \
   InputAudioViTEncoder, InputAudioHistoryViTEncoder, InputTextEncoder, ModalityEncoder
 from unified_io_2.modality_processing import UnifiedIOPreprocessing
@@ -73,8 +73,8 @@ def get_input_modalities(
 
 def get_target_modalities(
     target_modality=tuple(config.TARGET_MODALITIES),
-    image_vae_config: ImageViTVQGANConfig=VAEConfig(),
-    audio_vae_config: AudioViTVQGANConfig=AudioViTVQGANConfig(),
+    image_vqgan_config: VQGANConfig=VQGANConfig(),
+    audio_vqgan_config: AudioViTVQGANConfig=AudioViTVQGANConfig(),
 ) -> Dict[str, ModalityEncoder]:
   """Return the encoders to use for target modalities"""
 
@@ -82,9 +82,9 @@ def get_target_modalities(
   if 'text' in target_modality:
     out['text'] = TargetTextEncoder()
   if 'image' in target_modality:
-    out['image'] = TargetImageDVAEEmbedder(image_vae_config)
+    out['image'] = TargetImageDVAEEmbedder(image_vqgan_config)
   if 'audio' in target_modality:
-    out['audio'] = TargetAudioDVAEEmbedder(audio_vae_config)
+    out['audio'] = TargetAudioDVAEEmbedder(audio_vqgan_config)
   return out
 
 
@@ -97,7 +97,7 @@ def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, U
     config.freeze_vit, config.use_image_history_vit, config.use_audio_history_vit,
   )
   target_encoders = get_target_modalities(
-    config.target_modalities, config.image_vae, config.audio_vae)
+    config.target_modalities, config.image_vqgan, config.audio_vqgan)
   preprocessor = UnifiedIOPreprocessing(
     input_encoders, target_encoders, config.sequence_length, tokenizer_path)
   model = UnifiedIO(config.t5_config, input_encoders, target_encoders)
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     model_config.freeze_vit, model_config.use_image_history_vit, model_config.use_audio_history_vit,
   )
   target_encoders = get_target_modalities(
-    model_config.target_modalities, model_config.image_vae, model_config.audio_vae)
+    model_config.target_modalities, model_config.image_vqgan, model_config.audio_vqgan)
   model = UnifiedIO(model_config.t5_config, input_encoders, target_encoders)
   model.load_state_dict(torch.load("/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-text.pth"))
   model.eval()

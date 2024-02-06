@@ -166,9 +166,9 @@ class T5Config:
 
 
 @dataclass
-class VAEConfig:
+class VQGANConfig:
   # VQGAN CONFIG
-  embed_dim: int = 256
+  embed_dim: int = 4
   n_embed: int = 16384
   double_z: bool = False
   z_channels: int = 4
@@ -367,8 +367,8 @@ class Config:
 
   # Other configuration parts the same default for all model sizes, they don't need to be changed
   # unless experimenting with new models
-  image_vae: VAEConfig=VAEConfig()
-  audio_vae: AudioViTVQGANConfig=AudioViTVQGANConfig()
+  image_vqgan: VQGANConfig=VQGANConfig()
+  audio_vqgan: AudioViTVQGANConfig=AudioViTVQGANConfig()
   image_vit_cfg: ImageVitFeatureConfig=ImageVitFeatureConfig()
   audio_vit_cfg: AudioVitFeatureConfig=AudioVitFeatureConfig()
   use_image_vit: bool = True

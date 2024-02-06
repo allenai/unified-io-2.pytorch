@@ -167,7 +167,7 @@ class ViTImageEmbedder(nn.Module):
     if "llama_rope" in pos_emb_type:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
     
-  def __call__(self, input, pos_ids, mask, shared_embed, use_constraints=True):
+  def forward(self, input, pos_ids, mask, shared_embed, use_constraints=True):
     cfg = self.t5_config
     bs = input.shape[0]
     pos_emb_type = cfg.image_pos_emb if "image" in self.modality else cfg.audio_pos_emb
@@ -353,7 +353,7 @@ class ViTHistoryEmbedder(nn.Module):
     if "llama_rope" in pos_emb_type:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
 
-  def __call__(self, input, pos_ids, mask, *, use_constraints=True):
+  def forward(self, input, pos_ids, mask, *, use_constraints=True):
     cfg = self.config
 
     pos_emb_type = cfg.image_history_pos_emb if "image" in self.modality else cfg.audio_history_pos_emb
