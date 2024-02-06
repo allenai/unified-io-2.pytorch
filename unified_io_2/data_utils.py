@@ -14,7 +14,6 @@ import logging
 from unified_io_2 import config
 
 
-
 def apply_with_random_selector(x, func, num_cases):
   """Computes func(x, sel), with sel sampled from [0...num_cases-1].
   Args:

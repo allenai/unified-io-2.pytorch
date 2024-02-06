@@ -103,7 +103,7 @@ class InputTextEncoder(ModalityEncoder):
     if features.get(f"text_inputs") is None:
       return {"tokens": tf.zeros([0], dtype=tf.int32)}
     else:
-      max_len = sequence_length[f"text_inputs"]
+      max_len = sequence_length.get(f"text_inputs", 512)
       text_inputs = features[f"text_inputs"]
       if isinstance(text_inputs, str) or text_inputs.dtype == tf.dtypes.string:
         text_inputs = vocab.encode_tf(text_inputs)
@@ -181,14 +181,15 @@ class ViTImageEmbedder(nn.Module):
       x = torch.cat([x, x1], dim=-1)
     else:
       x = input
-    
-    # projecting the features.
+
+    # The image_encoder might have a different dtype
+    x = x.to(self.projection.weight.dtype)
     x = self.projection(x)
 
     pos_emb = self.pos_emb_cache[pos_ids]
 
     if "llama_rope" in pos_emb_type:
-      x += self.modality_embedding[None, None, :].to(x.dtype)
+      x += self.modality_embedding[None, None, :]
 
     return InputSequence(x, mask, position_embed = pos_emb)
 

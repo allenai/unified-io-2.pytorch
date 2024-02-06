@@ -8,7 +8,7 @@ from unified_io_2.vocabulary import SentencePieceVocabulary
 
 PAD_ID = 0
 EOS_ID = 1
-BOS_ID = 2
+BOS_ID = 0
 
 # Constants used when encoding region
 VOCAB_START = 200

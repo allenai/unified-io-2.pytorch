@@ -1,9 +1,10 @@
-from typing import TYPE_CHECKING, ContextManager, Dict, List, Mapping, Optional, TypeVar, Union, Any
+from typing import Any, Optional
+import torch
 
-from unified_io_2.config import ImageVitFeatureConfig, AudioVitFeatureConfig
-
-from unified_io_2.utils import *
 from unified_io_2 import layers
+from unified_io_2.config import AudioVitFeatureConfig
+from torch import nn
+from torch.nn import functional as F
 
 
 class MLP(nn.Module):
@@ -209,7 +210,8 @@ def transpose_input(pos_ids, input_size, patch_size):
 
 
 class AudioFeature(nn.Module):
-  """Image features"""
+  """Converts mel-spectrograms into features"""
+
   def __init__(self, config) -> None:
     super().__init__()
     self.config = config
@@ -223,6 +225,7 @@ class AudioFeature(nn.Module):
 
 
 if __name__ == "__main__":
+  # TODO remove for release
   print("Building pytorch ast...")
   ast_cfg = AudioVitFeatureConfig()
   audio_encoder = AudioFeature(ast_cfg)

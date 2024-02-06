@@ -372,6 +372,77 @@ class UnifiedIO(nn.Module, GenerationMixin):
     self.encoder = Encoder(cfg)
     self.decoder = Decoder(cfg)
 
+  @property
+  def device(self):
+    return self.text_token_embedder.weight.device
+
+  @torch.no_grad()
+  def score_answer_options(
+      self, batch, options, batch_size=None, average_loss=True):
+    """Scores multiple answers options for one set of inputs
+
+    Args:
+      batch: batch of inputs with batch size 1, targets in this batch are ignored
+      options: Tensor of tokenized text answer options, includes EOS but not BOS and padded with 0
+      batch_size: Compute answers for batches at a time to reduce memory
+      average_loss: Do average loss per token instead of total loss
+
+    Returns:
+      The scores of each answer option
+    """
+    if batch_size is None:
+      batch_size = len(options)
+      n_batches = 1
+    else:
+      n_batches = (batch_size -1 + len(options)) // batch_size
+
+    # Shift right and add BOS
+    input_tokens = torch.cat([
+      torch.zeros((options.shape[0], 1), dtype=options.dtype, device=options.device),
+      options[:, :-1]
+
+    ], dim=1)
+    target_seq: seq_features.TargetSequence = self.target_embedders["text"](
+      input_tokens, mask=options > 0, shared_embed=self.text_token_embedder)
+
+    batch = unflatten_dict(batch)
+    input_seq = self.encode_batch(batch["inputs"], False)
+    if input_seq.batch_size != 1:
+      raise NotImplementedError("Only batch 1 supported")
+    encoder_hidden = self.encoder(input_seq)
+    encoder_decoder_mask = layers.make_attention_mask(
+      target_seq.mask, input_seq.mask).to(self.config.dtype)
+    options = options.to(torch.long)  # for cross entropy
+    decoder_attn_mask = layers.make_decoder_mask(target_seq.mask)
+
+    all_loses = []
+    for batch_i in range(n_batches):
+      sl = slice(batch_i*batch_size, (batch_i+1)*batch_size)
+      mask = target_seq.mask[sl]
+      bs = mask.shape[0]
+      out_hidden = self.decoder(
+        encoded=encoder_hidden.expand(bs, -1, -1),
+        decoder_pos_emb=target_seq.position_embed[sl],
+        decoder_embedding=target_seq.input_embedding[sl],
+        decoder_attn_mask=decoder_attn_mask[sl],
+        encoder_pos_emb=input_seq.position_embed.expand(bs, -1, -1),
+        encoder_decoder_mask=encoder_decoder_mask[sl],
+        decoder_bias=None,
+        attn_pattern_mask=target_seq.attn_pattern_mask[sl]
+      )
+      embed = self.shared_embedding["text"]
+      logits = F.linear(out_hidden, embed.weight)
+      logits = logits / math.sqrt(out_hidden.shape[-1])
+      losses = F.cross_entropy(
+        logits.view(-1, logits.shape[-1]),
+        options[sl].view(-1), reduction="none")
+      losses = losses.view(bs, target_seq.seq_len) * mask
+      losses = losses.sum(-1)
+      if average_loss:
+        losses /= mask.sum(-1)
+      all_loses.append(losses)
+    return torch.cat(all_loses)
+
   @torch.no_grad()
   def generate(
       self,
@@ -422,7 +493,7 @@ class UnifiedIO(nn.Module, GenerationMixin):
     cfg = self.config
     features = unflatten_dict(batch, sep="/")
 
-    input_seq = self.encode_batch(batch["inputs"], horizontally_pack_inputs)
+    input_seq = self.encode_batch(features["inputs"], horizontally_pack_inputs)
     encoder_hidden = self.encoder(input_seq)
 
     target_parts = []

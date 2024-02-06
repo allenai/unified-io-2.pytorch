@@ -3,7 +3,7 @@ from typing import Dict, Tuple
 from transformers import LlamaTokenizer
 
 from unified_io_2 import config
-from unified_io_2.ast import AudioFeature
+from unified_io_2.audio_embedder import AudioFeature
 from unified_io_2.config import ImageVitFeatureConfig, AudioVitFeatureConfig, ImageResamplerConfig, \
   AudioResamplerConfig, Config, ImageViTVQGANConfig, AudioViTVQGANConfig, VAEConfig, get_tokenizer
 from unified_io_2.input_modalities import InputImageViTEncoder, InputImageHistoryViTEncoder, \
@@ -12,7 +12,7 @@ from unified_io_2.modality_processing import UnifiedIOPreprocessing
 from unified_io_2.model import UnifiedIO
 from unified_io_2.target_modalities import TargetTextEncoder, TargetImageDVAEEmbedder, \
   TargetAudioDVAEEmbedder
-from unified_io_2.vit import ImageFeature
+from unified_io_2.image_embedder import ImageFeature
 
 DEFAULT_SEQUENCE_LEN = {
   "is_training": True,
@@ -89,6 +89,8 @@ def get_target_modalities(
 
 
 def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, UnifiedIO]:
+  """Return a model (with new initialized parameters) and preprocess for the configuration"""
+
   input_encoders = get_input_modalities(
     config.input_modalities, config.image_vit_cfg, config.audio_vit_cfg,
     config.image_history_cfg, config.audio_history_cfg, config.use_image_vit, config.use_audio_vit,
@@ -96,14 +98,14 @@ def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, U
   )
   target_encoders = get_target_modalities(
     config.target_modalities, config.image_vae, config.audio_vae)
-  tokenizer = get_tokenizer(tokenizer_path)
   preprocessor = UnifiedIOPreprocessing(
-    input_encoders, target_encoders, config.sequence_length, tokenizer)
+    input_encoders, target_encoders, config.sequence_length, tokenizer_path)
   model = UnifiedIO(config.t5_config, input_encoders, target_encoders)
   return preprocessor, model
 
 
 if __name__ == "__main__":
+  # TODO remove for release
   import torch
   print("Building and Initiazling pytorch uio2-xxl-3M, all modalities to text...")
   model_config = config.XXL

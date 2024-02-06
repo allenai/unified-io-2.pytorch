@@ -11,6 +11,7 @@ def _map_name(name):
     return name
 
   if parts[0] == 'input_image_encoder':
+    # Vision transformer
     parts[0] = "input_embedders.image"
 
     if name == "input_image_encoder.image_encoder.vision_transformer.class_embedding":

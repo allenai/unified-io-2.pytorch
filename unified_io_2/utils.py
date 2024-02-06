@@ -15,7 +15,7 @@ import torch.utils._device
 from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities.load import _lazy_load as lazy_load
 from torch.serialization import normalize_storage_type
-
+import numpy as np
 
 def flatten_dict(d, sep="/"):
   _out = dict()
@@ -41,6 +41,19 @@ def unflatten_dict(d, sep='/'):
       k_out = k_out[key]
     k_out[parts[-1]] = v
   return out
+
+
+def pad_and_stack(data, add_eos=False):
+  data = [np.asarray(x) for x in data]
+  max_len = max(x.shape[0] for x in data)
+  if add_eos:
+    max_len += 1
+  out = np.zeros((len(data), max_len), dtype=np.int32)
+  for ix, x in enumerate(data):
+    out[ix, :len(x)] = x
+    if add_eos:
+      out[ix, len(x)] = 1
+  return torch.as_tensor(out)
 
 
 def get_default_supported_precision(training: bool) -> str:

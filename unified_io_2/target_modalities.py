@@ -64,15 +64,15 @@ class TargetTextEncoder(ModalityEncoder):
   def __init__(self):
     super().__init__()
 
-  def preprocess_inputs(self, features, sequence_length) -> Dict:
+  def preprocess_inputs(self, features, vocab, sequence_length) -> Dict:
     text_targets = features.get(f"text_targets")
     if text_targets is None:
       # TODO maybe this should completely empty?
       text_targets = tf.constant([config.EOS_ID], tf.int32)
 
-    max_len = sequence_length[f"text_targets"]
-    if text_targets.dtype == tf.dtypes.string:
-      raise NotImplementedError("Text must be pre-teoknized")
+    max_len = sequence_length.get(f"text_targets", 512)
+    if isinstance(text_targets, str) or text_targets.dtype == tf.dtypes.string:
+      text_targets = vocab.encode_tf(text_targets)
 
     text_targets = text_targets[..., :max_len-1]
 
@@ -102,7 +102,7 @@ class TargetTextEncoder(ModalityEncoder):
     features["targets"] = tokens
     features["inputs"] = make_autoregressive_inputs(
       tokens, sequence_id=features.get("segment_ids"), bos_id=config.BOS_ID)
-    features["position_ids"] = tf.range(text_len, dtype=tf.int32)
+    features["pos_ids"] = tf.range(text_len, dtype=tf.int32)
     features["segment_ids"] = tf.ones((text_len,), dtype=tf.int32)
     features["mask"] = tf.cast(tokens > config.PAD_ID, tf.int32)
     return features

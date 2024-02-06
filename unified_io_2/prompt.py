@@ -23,6 +23,54 @@ PROMPT_DICT['Refexp'] = {
   ]
 }
 
+PROMPT_DICT['Box_Classification_Scene'] = {
+  "original": ['What is the category of the object at {box}?'],
+  "manual": [
+    'What is the category item in the region {box}?',
+    'What is the category of the object in the region " {box} "?',
+    'What kind of object is in the region {box} of <image_input>?',
+    'What type object is located at " {box} "?',
+    'State the type object that is located in this bounding box: {box}.',
+    'There is an object at {box}, please categorize it.',
+    'Categorize {box}',
+    'Tag {box} in <image_input>',
+    'Tag the object at {box}.',
+    'Instruction: Categorize the object\nContext: {box}\n',
+    'Name the object in {box}',
+    'Name the object in {box} of the photograph',
+    'Help me figure out what kind of object is located at {box} in <image_input>',
+    'Region: {box}\nInstruction: Name the object in the region\n',
+    'Very briefly, tell me what object is in " {box} ".',
+  ],
+  "gpt3": [
+    'Can you identify the type of object that is located at {box}?',
+    'Name the object in the region: {box}',
+    'What type of object is present in the area " {box} "?',
+    'What is the object situated in the " {box} " region? Respond with just a few words.',
+    'Which object is positioned at " {box} "?',
+    'An object exists at {box}, can you identify it?',
+    'What category of item is located in the zone " {box} "?',
+    'What is the item in the " {box} " area?',
+    'There\'s something at {box}, can you tell what it is?',
+    'What kind of object can be found in {box}?',
+    'Identify the object in the region {box}.',
+    'Can you specify the object\'s category in the area {box}?',
+    'Which object is present in the " {box} " region?',
+    'An object is spotted at {box}, can you specify it?',
+    'What class of object lies in the part " {box} "?',
+    'What is the object in " {box} " area?',
+    'Which object resides in " {box} "?',
+    'Something is located at {box}, what would you categorize it as?',
+
+    'What kind of object can be found in the section {box}?',
+    'Identify the object in the region {box}.',
+    'Can you specify the object\'s category in the area {box}?',
+    'What class of object lies in the part {box}?',
+    'Briefly describe the object in {box} area?',
+    'Give a few word description of the object that resides in {box}?',
+  ]
+}
+
 PROMPT_DICT['Object_Detection'] = {
   "original": ['Return the bounding boxes and categories of region matching "{}"'],
   "manual": [
@@ -112,7 +160,7 @@ class Prompt:
     self.gpt3_flag = gpt3_flag
     self.single_prompt = single_prompt
 
-  def random_prompt(self, task_name, dataset_name):
+  def random_prompt(self, task_name, dataset_name=None):
     prompt_list = []
     if self.original_flag:
       prompt_list += PROMPT_DICT[task_name]['original']
@@ -129,5 +177,7 @@ class Prompt:
         prompt_list += PROMPT_DICT[dataset_name]['gpt3']
     if not prompt_list:
       raise ValueError(f"No prompts for {task_name}/{dataset_name}")
+    if self.single_prompt:
+      return prompt_list[0]
     ix = np.random.randint(0, len(prompt_list))
     return prompt_list[ix]
