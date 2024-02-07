@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Any, Sequence, Optional, List, Union
+from dataclasses import dataclass, field
+from typing import Any, Sequence, Optional, List, Union, Dict, Tuple
 
 import torch
 import math
@@ -361,9 +361,9 @@ class Config:
   image_history_cfg: ImageResamplerConfig=ImageResamplerConfig()
   audio_history_cfg: AudioResamplerConfig=AudioResamplerConfig()
   freeze_vit: bool = True
-  input_modalities = tuple(INPUT_MODALITIES)
-  target_modalities = tuple(TARGET_MODALITIES)
-  sequence_length = DEFAULT_SEQUENCE_LEN
+  input_modalities: Tuple = tuple(INPUT_MODALITIES)
+  target_modalities : Tuple = tuple(TARGET_MODALITIES)
+  sequence_length: Dict = field(default_factory=lambda: dict(DEFAULT_SEQUENCE_LEN))
 
   # Other configuration parts the same default for all model sizes, they don't need to be changed
   # unless experimenting with new models
@@ -377,7 +377,6 @@ class Config:
   use_audio_history_vit: bool = True
 
 
-# TODO these need to be tested
 LARGE = Config(
   t5_config=T5Config(
     emb_dim=1024,

@@ -85,6 +85,27 @@ PROMPT_DICT['Object_Detection'] = {
   ],
 }
 
+PROMPT_DICT['Object_Detection_No_Cat'] = {
+  "original": ['Which regions does the text "{}" describe?'],
+  "manual": [
+    "Objects: {}\nInstruction: Return the location of the objects in the image",
+    "I am looking for {} in this picture, can you show me where they are?",
+    "What regions contain {} in <image_input>?",
+    'Find image regions that match: {}',
+    'Find all instances of {}.',
+    'Please find all instances of {} in <image_input>',
+    'Locate all instances of {}.',
+    'List the regions of the image that match {}.',
+    'Find all regions in the image corresponding to the category "{}".',
+  ],
+  "gpt3": [
+    'Find every "{}" in this image.',
+    'Please locate all of the {} in this image.',
+    'Search the image for all regions corresponding to the text "{}".',
+    'Identify all "{}" regions in the image.',
+  ]
+}
+
 PROMPT_DICT['Object_Segmentation'] = {
   'original': [
     'Segment the object in this bounding box: {}',
@@ -147,6 +168,40 @@ PROMPT_DICT['image_caption_coco_2017'] = {
     'Briefly describe <image_input>.',
     'Concisely describe this image.',
     'Brief summary of the image:',
+  ]
+}
+
+
+PROMPT_DICT['Pose_Estimation'] = {
+  'original': [
+    'Find the visible human joints in the region " {} ".'
+  ],
+  'manual': [
+    'Find the visible keypoints corresponding to the person located at {}',
+    'Return the visible keypoints on the human body of the person in the region {}',
+    'Find the visible human joints of the person located at {}.',
+  ],
+  'gpt3': [
+    'Locate the visible human joints in the region {}.',
+    'Where are the visible human joints in the region {} ?',
+    'Could you please find the visible joints of a human in the region {}.',
+    'Locate the joints of the person located at {}.',
+    'Identify the visible joints of the human located at {}.',
+    'Find the visible keypoints on the human body in the region {}.',
+    'Identify the visible keypoints on the human body appearing at {}.',
+    "Identify the noticeable keypoints for the person found at {}.",
+    "Spot the visible human joints of the individual positioned at {}.",
+    "Detect the discernible keypoints associated with the person at location {}.",
+    "Locate the observable keypoints for the person situated at {}.",
+    "Point out the visible joints on the human body located at {}.",
+    "Track the observable joints of the person in the region {}.",
+    "Spot the discernible human joints located in the region {}.",
+    "Identify the apparent keypoints for the individual within the region {}.",
+    "Find the keypoints for the person stationed at {}.",
+    "Locate the discernible joints of the person present at {}.",
+    "Detect the human joints in the {} region that are visible.",
+    "Track the person's visible keypoints found in the region {}.",
+    "Trace the visible keypoints of the person located in {}.",
   ]
 }
 
