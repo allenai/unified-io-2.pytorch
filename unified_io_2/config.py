@@ -67,11 +67,6 @@ AUDIOSET_STD = 3.8312
 AUDIO_VIT_MEAN = -4.26
 AUDIO_VIT_STD = 9.14
 
-HUMAN_POSE_PART = [
-    "nose", "left eye", "right eye", "left ear", "right ear", "left shoulder", 
-    "right shoulder", "left elbow", "right elbow", "left wrist", "right wrist", 
-    "left hip", "right hip", "left knee", "right knee", "left ankle", "right ankle"]
-
 
 DEFAULT_EXTRA_IDS = VOCAB_START + NUM_DETECTION_BIN
 MODALITY_EXTRA_ID_N_FRAMES = 8  # 8 frames just in case
@@ -117,7 +112,6 @@ class T5Config:
   mlp_activations: Sequence[str] = ('silu', 'linear')
   dropout_rate: float = 0.0
   dropout_broadcast_dims: Sequence[int] = (-2, )
-  droppath_rate: float = 0.0
   # the embedding weights are used in the decoder output layer.
   logits_via_embedding: bool = True
   # Whether to accumulate attention logits in float32 regardless of dtype.
@@ -151,14 +145,7 @@ class T5Config:
   shift_back_input_token: bool = False
   unk_mask_token: bool = False
   
-  num_seg_emb: int = 4
-  use_drop_path: bool = False
-  zero_masked_embedding: bool=False
-  shorten: Optional[List]=None
   image_tokenizer_type: str = "vqgan" # vitvqgan, vqgan, movq
-  scan_layers: bool = False
-  scan_unroll: Union[int, str] = "all"
-  scan_axis: int = 1
 
   @property
   def is_encoder_decoder(self):
@@ -387,8 +374,6 @@ LARGE = Config(
     head_dim=64,
     mlp_dim=2816
   ),
-  image_history_cfg=ImageResamplerConfig(),
-  audio_history_cfg=AudioResamplerConfig(),
 )
 
 XL = Config(
