@@ -696,7 +696,7 @@ class VectorQuantizer(nn.Module):
 
     self.embedding = nn.Embedding(n_e, e_dim)
     # default_embedding_init = nn.initializers.variance_scaling(1.0, 'fan_in', 'normal', out_axis=0)
-    nn.init.kaiming_normal_(self.embedding, mode='fan_in', nonlinearity='linear')
+    nn.init.kaiming_normal_(self.embedding.weight, mode='fan_in', nonlinearity='linear')
   
   def get_codebook_entry(self, indices, shape=None):
     # shape specifying (batch, height, width, channel)

@@ -134,9 +134,9 @@ def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, U
 if __name__ == "__main__":
   # TODO remove for release
   import torch
-  print("Building and Initiazling pytorch uio2-xxl-3M, all modalities to text...")
+  print("Building and Initiazling pytorch uio2-xxl-3M, all modalities to image/text...")
   model_config = config.XXL
-  model_config.target_modalities = tuple(['text'])
+  model_config.target_modalities = tuple(['text', 'image'])
   input_encoders = get_input_modalities(
     model_config.input_modalities, model_config.image_vit_cfg, model_config.audio_vit_cfg,
     model_config.image_history_cfg, model_config.audio_history_cfg, model_config.use_image_vit, model_config.use_audio_vit,
@@ -145,8 +145,8 @@ if __name__ == "__main__":
   target_encoders = get_target_modalities(
     model_config.target_modalities, model_config.image_vqgan, model_config.audio_vqgan)
   model = UnifiedIO(model_config.t5_config, input_encoders, target_encoders)
-  model.load_state_dict(torch.load("/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-text.pth"))
-  model.eval()
+  # model.load_state_dict(torch.load("/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-text.pth"))
+  # model.eval()
 
   import pdb; pdb.set_trace()
 
