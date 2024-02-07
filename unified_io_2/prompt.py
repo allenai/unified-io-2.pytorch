@@ -206,6 +206,61 @@ PROMPT_DICT['Pose_Estimation'] = {
 }
 
 
+PROMPT_DICT['video_captioning'] = {
+  "original": [
+    'What does the video describe ?',
+    'Caption the video with a short description.',
+    'Write a short description of this video.',
+    'Describe the video with a short description.',
+    'Write a brief caption describing the video.'
+  ],
+  'gpt3': [
+    "What is the video portraying in a short description? ",
+    "Can you tell what the video is depicting in short?",
+    "Can you briefly explain what is the video illustrating ?",
+
+    'Give a brief summary of the video.',
+    'In a short statement, caption the video.',
+    'What is the video showing? Please describe in short.',
+    'Describe the content of the video briefly.',
+    'Please summarize the video in a few words.',
+    'What is the main theme of the video? Please write briefly.',
+    'What\'s the video about? Give a concise description.',
+    'Briefly, what does this video present?',
+    'In brief terms, explain the content of the video.',
+    'Give a succinct summary of what the video shows.',
+    'In a few words, describe the video.',
+    'Can you briefly caption this video?',
+    'Please give a quick summary of the video.',
+    'What\'s the key takeaway from the video? Briefly describe.',
+    'Briefly, what is this video all about?',
+    'What is the essence of the video? Describe in a sentence.',
+    'Write a short caption that summarizes the video.',
+    'Please provide a brief caption for the video.',
+    'In short, what does this video depict?',
+    'How would you briefly summarize the video?',
+    'What\'s the brief overview of the video?',
+    'Provide a concise narrative of the video.',
+    'Can you encapsulate the video\'s content in a few words?',
+    'Briefly capture the essence of the video.',
+    'Give a short explanation of what the video is about.',
+    'What\'s the main point of the video? Provide a brief description.',
+    'In a nutshell, what is the video presenting?',
+    'What\'s the short summary of the video?',
+    'Write a brief description encapsulating the video.',
+  ]
+}
+
+PROMPT_DICT['audio_caption']['original'] = [
+  'Give a short description of this audio.',
+  'Caption the audio with a short description.',
+  'Write a short description of this audio.',
+  'Describe the audio in short.',
+  'Write a short caption describing this noise.',
+  'In brief, what is this sound?'
+]
+
+
 class Prompt:
   def __init__(self, original_flag=True, manual_flag=True,
                gpt3_flag=True, single_prompt=False):

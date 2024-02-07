@@ -293,7 +293,7 @@ class TaskRunner:
     return kps, text
 
   def keypoint(self, image):
-    """End-to-end keypoint, require multiple rounds of generation
+    """End-to-end keypoint, requires multiple rounds of generation
 
     Args:
       image: Image to get keypoints for
@@ -307,8 +307,36 @@ class TaskRunner:
       all_points.append(self.keypoint_box(image, box)[0])
     return all_points
 
+  def video_captioning(self, video):
+    """Caption a video
+
+    Args:
+      video: video file path, or a sequence of frames
+
+    Returns: Text video caption
+    """
+    prompt = self.prompt.random_prompt("video_captioning")
+    batch = self.uio2_preprocessor(
+      text_inputs=prompt, video_inputs=video, target_modality="text")
+    text = self.predict_text(batch, max_tokens=64)
+    return text
+
+  def audio_captioning(self, audio):
+    """Caption an audio clip
+
+    Args:
+      audio: audio file path, or a sequence of spectograms
+
+    Returns: Text audio caption
+    """
+    prompt = self.prompt.random_prompt("audio_caption")
+    batch = self.uio2_preprocessor(
+      text_inputs=prompt, audio_inputs=audio, target_modality="text")
+    text = self.predict_text(batch, max_tokens=64)
+    return text
+
   def image_generation(self, text):
-    prompt = self.prompt.random_prompt(None, "VQA_short_prompt")
+    prompt = self.prompt.random_prompt("audio_caption")
     batch = self.uio2_preprocessor(text_inputs=prompt)
     out = self.model.predict_image(batch)
     return out["image"], out

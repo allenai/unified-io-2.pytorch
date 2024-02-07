@@ -451,7 +451,7 @@ class UnifiedIO(nn.Module, GenerationMixin):
       **kwargs,
   ):
     batch = unflatten_dict(batch)
-    input_seq = self.encode_batch(batch["inputs"], False)
+    input_seq = self.encode_batch(batch["inputs"])
     encoder_hidden = self.encoder(input_seq)
 
     bs = input_seq.batch_size
@@ -472,28 +472,21 @@ class UnifiedIO(nn.Module, GenerationMixin):
       encoder_mask=input_seq.mask,
     )
 
-  def encode_batch(self, input_features, horizontally_pack_inputs):
+  def encode_batch(self, input_features):
     input_parts: List[InputSequence] = []
     for k, v in self.input_embedders.items():
       input_parts.append(v(**input_features[k], shared_embed=self.shared_embedding.get(k)))
-
-    input_parts_to_pack = input_parts
-    if horizontally_pack_inputs:
-      input_seq = seq_features.pack_horizontally(input_parts_to_pack, horizontally_pack_inputs)
-    else:
-      input_seq = seq_features.concat_sequences(input_parts_to_pack)
+    input_seq = seq_features.concat_sequences(input_parts)
     return input_seq
 
   def forward(
       self,
       batch,
-      horizontally_pack_inputs=None,
-      horizontally_pack_targets=False,
   ) -> torch.Tensor:
     cfg = self.config
     features = unflatten_dict(batch, sep="/")
 
-    input_seq = self.encode_batch(features["inputs"], horizontally_pack_inputs)
+    input_seq = self.encode_batch(features["inputs"])
     encoder_hidden = self.encoder(input_seq)
 
     target_parts = []
@@ -508,10 +501,7 @@ class UnifiedIO(nn.Module, GenerationMixin):
       part.loss_mask = None
       part.target_tokens = None
 
-    if horizontally_pack_targets:
-      target_seq = seq_features.pack_horizontally(target_parts, horizontally_pack_targets)
-    else:
-      target_seq = seq_features.concat_sequences(target_parts)
+    target_seq = seq_features.concat_sequences(target_parts)
 
     encoder_decoder_mask = layers.make_attention_mask(
       target_seq.mask, input_seq.mask).to(cfg.dtype)
@@ -537,12 +527,8 @@ class UnifiedIO(nn.Module, GenerationMixin):
       attn_pattern_mask=target_seq.attn_pattern_mask,
     )
 
-    if horizontally_pack_targets:
-      embedding_parts = seq_features.split_and_unpack(
-        hidden_state, [x.mask for x in target_parts])
-    else:
-      embedding_parts = torch.split(
-        hidden_state, [x.seq_len for x in target_parts], dim=1)
+    embedding_parts = torch.split(
+      hidden_state, [x.seq_len for x in target_parts], dim=1)
 
     logits = {}
     for name, state, targets, mask in zip(

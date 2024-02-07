@@ -1,83 +1,17 @@
 import logging
-import random
-import string
 import subprocess
-import time
-from typing import Union, Optional
+from os.path import exists
+from typing import Optional
 
 import numpy as np
-
 import scipy
+from scipy.io import wavfile
 
-__all__ = ["load_audio", "extract_spectrograms_from_audio"]
-
-
-AUDIO_SEGMENT_LENGTH = 4.08
-AUDIO_SPECTRUM_LENGTH = 4.08
-AUDIO_SAMPLING_RATE = 16000
-
-AUDIOSET_MEAN = -5.0945
-AUDIOSET_STD = 3.8312
+from unified_io_2 import config
 
 
-def load_audio(
-    path: str,
-    audio_segment_length=AUDIO_SEGMENT_LENGTH,
-    spectrogram_length=AUDIO_SEGMENT_LENGTH,
-    audio_length: Optional[float] = None,
-    max_audio_length:  Optional[float]=None,
-    **kwargs
-):
-  if audio_length is None:
-    audio_length = get_audio_length(path)
-  if audio_length is None:
-    raise ValueError("No audio found")
-  if max_audio_length is not None:
-    clip_end_time = min(audio_length, max_audio_length)
-    if clip_end_time < audio_length:
-      logging.warning(
-        f"Use the input audio length of {clip_end_time} (original {audio_length}) seconds.")
-    audio_length = clip_end_time
-  return extract_spectrograms_from_audio(
-    audio_file=path,
-    audio_length=audio_length,
-    audio_segment_length=audio_segment_length,
-    spectrogram_length=spectrogram_length,
-    **kwargs
-  )
-
-
-def get_audio_length(audio_path):
-  proc = subprocess.Popen(
-    [
-      "ffprobe",
-      "-v",
-      "error",
-      "-select_streams",
-      "a:0",
-      "-show_entries",
-      "stream=duration",
-      "-of",
-      "default=noprint_wrappers=1:nokey=1",
-      audio_path,
-    ],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-  )
-
-  out, _ = proc.communicate()
-  duration = out.decode("utf-8")
-
-  try:
-    duration = float(out.strip())
-  except:
-    print(f"Invalid duration for {audio_path}: {duration}")
-    duration = None
-
-  return duration
-
-
-BUFFER_FROM_END = 0.1  # was .05 earlier but changed to 0.1 to avoid drops in msvd; found by trial and error with ffmpeg
+BUFFER_FROM_END = 0.1
+WAV_MAX_VALUE = 32768.0
 
 
 def get_num_segments(audio_length, audio_segment_length):
@@ -95,58 +29,87 @@ def get_num_segments(audio_length, audio_segment_length):
   return num_segments
 
 
-def read_audio_file(audio_file: str):
-  if audio_file.startswith("http"):
-    filename = "".join(random.choices(string.ascii_lowercase, k=8)) + ".wav"
-    cmd = f"wget -O {filename} {audio_file}"
-    _ = subprocess.Popen(
-      cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True
-    )
-    audio_file = filename
+def get_audio_length(audio_path):
+  out = subprocess.check_output(
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      audio_path,
+    ],
+  )
+  duration = float(out.decode("utf-8").strip())
+  return duration
 
+
+def read_audio_file(src, sr=config.AUDIO_SAMPLING_RATE):
+  """Load wavform from file or file handle"""
   try:
     import librosa
-  except ImportError:
-    raise ImportError("librosa must be installed to read audio files")
-
-  waveform, sr = librosa.core.load(audio_file, sr=AUDIO_SAMPLING_RATE)
-  waveform = waveform.astype("float32")
+  except ImportError as e:
+    raise ValueError("Librosa must be install for audio pre-processing", e)
+  waveform, _sr = librosa.core.load(src, sr=sr)
+  assert _sr == sr
+  waveform = waveform.astype(np.float32)
   if len(waveform.shape) > 1:
     waveform = np.mean(waveform, axis=1)
-  if sr != AUDIO_SAMPLING_RATE:
-    try:
-      import resampy
-    except ImportError:
-      raise ImportError("Resampy must be installed to read audio files")
-    waveform = resampy.resample(waveform, sr, AUDIO_SAMPLING_RATE)
   return waveform
 
 
+def make_spectrogram(waveform, sample_rate=16000, n_fft=1024, hop_length=256):
+  """
+  Make spectrogram from waveform
+
+  :param waveform: wave file
+  :param sample_rate: Sample rate
+  :param eps: eps value for converting to log-mel-scaled spectrogram
+
+  params for the librosa function
+  - n_fft: number of samples in window for DFT, at default sampling rate of 22050, this is 69.65ms
+  - hop_length: number of samples from the start of one window to start of the next
+  - n_mels: number of bins on the mel scale
+
+  where time frames = math.floor(sample_rate * duration / hop_length) + 1
+                376 = (22050 * 10s / 588) + 1
+
+  Manually selected by Sangho parameters had best sound quality during tests
+  https://librosa.org/doc/main/generated/librosa.stft.html - Faster if n_fft is a power of two
+
+  :return:
+  """
+  try:
+    from librosa.feature import melspectrogram
+  except ImportError as e:
+    raise ValueError("Librosa must be install for audio pre-processing", e)
+  params = {
+    'n_fft': n_fft,                      # Manually selected by Sangho
+    'hop_length': hop_length,            # Manually selected by Sangho
+    'window': scipy.signal.windows.hann, # Default
+    'n_mels': 128,                       # Manually selected by Sanho
+    'fmin': 0.0,                         # Manually selected by Sangho
+    'fmax': sample_rate / 2.0,           # Default 22050
+    'center': True,
+    'pad_mode': 'reflect',
+  }                                    # Spectrogram therefore has shape (64, 626) for 10s
+  mel = melspectrogram(y=waveform, sr=sample_rate, **params)
+  # log_mel = np.log(mel + eps) - np.log(eps)
+  # return log_mel
+  return mel
+
+
 def extract_spectrograms_from_audio(
-    audio_file: Union[str, np.ndarray],
-    audio_segment_length: float = AUDIO_SEGMENT_LENGTH,
-    spectrogram_length: float = AUDIO_SPECTRUM_LENGTH,
-    audio_length=None,
-    sampling_rate: int = AUDIO_SAMPLING_RATE,
+    waveform: np.ndarray,
+    audio_length,
+    audio_segment_length: float = config.AUDIO_SEGMENT_LENGTH,
+    spectrogram_length: float = config.AUDIO_SPECTRUM_LENGTH,
+    sampling_rate: int = config.AUDIO_SAMPLING_RATE,
 ):
-  # read in the audio file
-  if isinstance(audio_file, str):
-    waveform = read_audio_file(audio_file)
-  else:
-    assert audio_file.ndim == 1
-    # cached waveform
-    waveform = audio_file
-  if waveform is None:
-    print("NO AUDIO FROM WAVEFILE!")
-    return None
-
-  if audio_length is None:
-    # get actual audio length
-    audio_length = get_audio_length(audio_file)
-  if audio_length is None:
-    print(f"Couldn't get audio length for {audio_file}")
-    return None
-
   num_segments = get_num_segments(audio_length, audio_segment_length)
   boundaries = np.linspace(
     0, num_segments * audio_segment_length, num_segments + 1
@@ -187,20 +150,16 @@ def extract_spectrograms_from_audio(
       start = int(ts_mid - sampling_rate * spectrogram_length / 2)
       end = start + int(sampling_rate * spectrogram_length)
       waveform_segment = waveform[start:end]
+
     # Create spectrogram from waveform
-    try:
-      spectrogram = make_spectrogram(
-        waveform_segment, sampling_rate, n_fft=1024, hop_length=256
-      )  # shape (128, 256)
-    except Exception as exc:
-      print(f"Couldn't make spectrogram, {exc}")
-      return None
+    spectrogram = make_spectrogram(
+      waveform_segment, sampling_rate, n_fft=1024, hop_length=256
+    )  # shape (128, 256)
     spectrograms.append(spectrogram)
 
   if len(spectrograms) == 0:
     assert num_segments == 0
-    print("Couldn't make spectrograms: num_segments is 0")
-    return None
+    raise ValueError("Couldn't make spectrograms: num_segments is 0")
 
   # (N,128,256) is (# of segments, # of mel bands in spectrogram, # of hops in spectrogram)
   spectrograms = np.stack(spectrograms).astype(np.float32)
@@ -208,47 +167,25 @@ def extract_spectrograms_from_audio(
   return spectrograms
 
 
-def make_spectrogram(
-    waveform,
-    sample_rate=16000,
-    n_fft=1024,
-    hop_length=256,
+def load_audio(
+    path: str,
+    audio_segment_length=config.AUDIO_SEGMENT_LENGTH,
+    spectrogram_length=config.AUDIO_SEGMENT_LENGTH,
+    max_audio_length:  Optional[float] = None,
 ):
-  """
-  Make spectrogram using librosa of shape (mel_bands, frames)
+  if not exists(path):
+    raise FileNotFoundError(f"{path} not found")
+  audio_length = get_audio_length(path)
+  if max_audio_length and max_audio_length > audio_length:
+    logging.warning(f"Use the input audio length of {max_audio_length} (original {audio_length}) seconds.")
+    audio_length = max_audio_length
 
-  :param waveform: wave file
-  :param sample_rate: Sample rate
+  wavform = read_audio_file(path)
 
-  params for the librosa function
-  - n_fft: number of samples in window for DFT, at default sampling rate of 22050, this is 69.65ms
-  - hop_length: number of samples from the start of one window to start of the next
-  - n_mels: number of bins on the mel scale
+  return extract_spectrograms_from_audio(
+    wavform,
+    audio_length=audio_length,
+    audio_segment_length=audio_segment_length,
+    spectrogram_length=spectrogram_length,
+  )
 
-  where time frames = math.floor(sample_rate * duration / hop_length) + 1
-                376 = (22050 * 10s / 588) + 1
-
-  Manually selected by Sangho parameters had best sound quality during tests
-  https://librosa.org/doc/main/generated/librosa.stft.html - Faster if n_fft is a power of two
-
-  :return:
-  """
-  params = {
-    "n_fft": n_fft,  # Manually selected by Sangho
-    "hop_length": hop_length,  # Manually selected by Sangho
-    "window": scipy.signal.windows.hann,  # Default
-    "n_mels": 128,  # Manually selected by Sanho
-    "fmin": 0.0,  # Manually selected by Sangho
-    "fmax": sample_rate / 2.0,  # Default 22050
-    "center": True,
-    "pad_mode": "reflect",
-  }  # Spectrogram therefore has shape (64, 626) for 10s
-
-  try:
-    import librosa
-  except ImportError:
-    raise ImportError("librosa must be installed to read audio files")
-  mel = librosa.feature.melspectrogram(y=waveform, sr=sample_rate, **params)
-  # log_mel = np.log(mel + eps) - np.log(eps)
-  # return log_mel
-  return mel
