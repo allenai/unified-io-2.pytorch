@@ -10,7 +10,7 @@ from unified_io_2.input_modalities import InputImageViTEncoder, InputImageHistor
   InputAudioViTEncoder, InputAudioHistoryViTEncoder, InputTextEncoder, ModalityEncoder
 from unified_io_2.modality_processing import UnifiedIOPreprocessing
 from unified_io_2.model import UnifiedIO
-from unified_io_2.target_modalities import TargetTextEncoder, TargetImageDVAEEmbedder, \
+from unified_io_2.target_modalities import TargetTextEncoder, TargetImageVQGANEmbedder, \
   TargetAudioDVAEEmbedder
 from unified_io_2.image_embedder import ImageFeature
 
@@ -109,7 +109,7 @@ def get_target_modalities(
   if 'text' in target_modality:
     out['text'] = TargetTextEncoder()
   if 'image' in target_modality:
-    out['image'] = TargetImageDVAEEmbedder(image_vqgan_config)
+    out['image'] = TargetImageVQGANEmbedder(image_vqgan_config)
   if 'audio' in target_modality:
     out['audio'] = TargetAudioDVAEEmbedder(audio_vqgan_config)
   return out

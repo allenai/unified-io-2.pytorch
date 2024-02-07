@@ -307,15 +307,28 @@ def make_decoder_mask(token_mask,
 
 def make_causal_mask(seq_len):
   idxs = torch.arange(seq_len, dtype=torch.int32)
-  mask = idxs[None, :] <= idxs[None, :]
+  mask = idxs[None, :] <= idxs[:, None]
   return mask[None, None, :, :]
 
 
-def combine_masks(masks):
-  combined = masks[0]
-  for mask in masks[1:]:
-    combined = torch.logical_or(combined, mask)
-  return combined
+def combine_masks(*masks: Optional[torch.Tensor]):
+  """Combine attention masks.
+
+  Args:
+    *masks: set of attention mask arguments to combine, some can be None.
+
+  Returns:
+    Combined bool mask, reduced by logical and, returns None if no masks given.
+  """
+  masks = [m for m in masks if m is not None]
+  if not masks:
+    return None
+  assert all(map(lambda x: x.ndim == masks[0].ndim, masks)), (
+      f'masks must have same the number of dimensions: {tuple(map(lambda x: x.ndim, masks))}')
+  mask, *other_masks = masks
+  for other_mask in other_masks:
+    mask = torch.logical_and(mask, other_mask)
+  return mask
 
 
 def combine_biases(*masks: Optional[torch.Tensor]):
@@ -723,4 +736,4 @@ class VectorQuantizer(nn.Module):
     # reshape back to match original input shape
     z_q = einops.rearrange(z_q, 'b h w c -> b c h w').contiguous()
 
-    return z_q, loss, (perplexity, min_encodings, min_encoding_indices)
+    return z_q, loss, (perplexity, min_encodings, min_encoding_indices.to(torch.int32))

@@ -142,8 +142,6 @@ class T5Config:
 
   dynamic_unk_mask: bool = True
   dalle_attn_mask: bool = True
-  shift_back_input_token: bool = False
-  unk_mask_token: bool = False
   
   image_tokenizer_type: str = "vqgan" # vitvqgan, vqgan, movq
 
