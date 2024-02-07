@@ -345,15 +345,16 @@ class ViTHistoryEmbedder(nn.Module):
     nn.init.trunc_normal_(self.post_projection.weight, std=math.sqrt(1 / self.resampler_config.emb_dim), a=-2.0, b=2.0)
  
     self.register_buffer('pos_emb_cache', layers.get_2d_position_embedding(
-      pos_emb_type, (self.resampler_config.max_frames, self.resampler_config.latents_size), 
+      pos_emb_type, (self.resampler_config.max_frames, self.resampler_config.latents_size),
       (1, 1), cfg.emb_dim, cfg.head_dim, self.modality_idx).reshape(
-        self.resampler_config.max_frames, self.resampler_config.latents_size, -1))
+      self.resampler_config.max_frames, self.resampler_config.latents_size, -1),
+      persistent=False)
     self.raw_emb_dim = cfg.image_raw_emb_dim if "image" in self.modality else cfg.audio_raw_emb_dim
 
     if "llama_rope" in pos_emb_type:
       self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
 
-  def forward(self, input, pos_ids, mask, *, use_constraints=True):
+  def forward(self, input, pos_ids, mask, *, shared_embed=None, use_constraints=True):
     cfg = self.config
 
     pos_emb_type = cfg.image_history_pos_emb if "image" in self.modality else cfg.audio_history_pos_emb

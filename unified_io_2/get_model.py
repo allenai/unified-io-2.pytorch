@@ -26,6 +26,29 @@ DEFAULT_SEQUENCE_LEN = {
 }
 
 
+class ModuleReference:
+  # Used as part of a hack to handle a case where multiple modules what a reference to
+  # a shared submodule in UIO2.
+  #
+  # In particular `InputAudioHistoryViTEncoder` and  `InputImageViTEncoder` both need a reference to
+  # the `ImageFeature` module, which causes issues where the state dict includes the
+  # `ImageFeature` parameters twice, once for each reference.
+  #
+  # I am not sure what the canonical solution to this is, but as a hack we wrap the
+  # `ImageFeature` in this class for history encoder so it has a reference to the module,
+  # but does not register the module. Then the state_dict will onlu include one copy of the
+  # `ImageFeature` parameters
+  def __init__(self, module):
+    self.module = module
+
+  @property
+  def config(self):
+    return self.module.config
+
+  def __call__(self, *args, **kwargs):
+    return self.module(*args, **kwargs)
+
+
 def get_input_modalities(
     input_modality=tuple(config.INPUT_MODALITIES),
     image_vit_cfg: ImageVitFeatureConfig=ImageVitFeatureConfig(),
@@ -59,15 +82,19 @@ def get_input_modalities(
       image_encoder if use_image_vit else None, use_image_vit, freeze_vit)
 
   if 'image_history' in input_modality:
-    out["image_history"] = InputImageHistoryViTEncoder(
-      image_encoder if use_image_history_vit else None, image_history_cfg)
+    encoder = image_encoder if use_image_history_vit else None
+    if "image" in input_modality and encoder is not None:
+      encoder = ModuleReference(encoder)
+    out["image_history"] = InputImageHistoryViTEncoder(encoder, image_history_cfg)
 
   if 'audio' in input_modality:
     out["audio"] = InputAudioViTEncoder(audio_encoder if use_audio_vit else None, use_audio_vit, freeze_vit)
 
   if 'audio_history' in input_modality:
-    out["audio_history"] = InputAudioHistoryViTEncoder(
-      audio_encoder if use_audio_history_vit else None, audio_history_cfg)
+    encoder = audio_encoder if use_audio_history_vit else None
+    if "audio" in input_modality and encoder is not None:
+      encoder = ModuleReference(encoder)
+    out["audio_history"] = InputAudioHistoryViTEncoder(encoder, audio_history_cfg)
   return out
 
 

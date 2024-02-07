@@ -10,8 +10,20 @@ def _map_name(name):
   if len(parts) == 0:
     return name
 
+  if parts[0] in {"input_encoders_audio_history", "input_encoders_image_history"}:
+    # resampler translation
+    if parts[0] == "input_encoders_image_history":
+      parts[0] = "input_embedders.image_history"
+    else:
+      parts[0] = "input_embedders.audio_history"
+
+    if parts[-1] == "resampler_latents":
+      parts[-1] = "latents"
+    if len(parts) > 2 and parts[2] == "PerceiverResampler_0":
+      parts[2] = "perceiver"
+
   if parts[0] in {'input_image_encoder', 'input_audio_encoder'}:
-    # Vision transformer
+    # encoder translation
     if "audio" in parts[0]:
       parts[0] = "input_embedders.audio"
     else:
@@ -100,6 +112,10 @@ def load_checkpoint(
   if "audio" in input_modalities:
     prefixes.append('audio_token_embedder')
     prefixes.append('input_audio_encoder')
+  if "audio_history" in input_modalities:
+    prefixes.append('input_encoders_audio_history')
+  if "image_history" in input_modalities:
+    prefixes.append('input_encoders_image_history')
   if "image" in target_modalities:
     raise ValueError()
 
