@@ -133,7 +133,7 @@ class TargetImageDVAEEmbedder(ModalityEncoder):
       image_target_masks = tf.zeros([0], tf.int32)
       image_target_task_masks = tf.zeros([0], tf.int32)
     else:
-      image_targets = image_targets * 2.0 - 1  # VAE pre-processing
+      image_targets = image_targets * 2.0 - 1  # VQGAN pre-processing
       # In case the dimension were unknown
       image_targets = tf.ensure_shape(image_targets, image_target_size + [3])
       assert image_target_masks is not None
@@ -191,7 +191,7 @@ class TargetImageDVAEEmbedder(ModalityEncoder):
 
 
 class ImageViTVQGAN(nn.Module):
-  def __init__(self, config, vae_config, embedding_layer):
+  def __init__(self, config, vqgan_config, embedding_layer):
     super().__init__()
     self.config = config
 
@@ -203,7 +203,7 @@ class ImageViTVQGAN(nn.Module):
                           loss_mask=None, segment_ids=None, cur_index=None, pos_ids=None):
     pass
 
-  def __call__(self, image, mask=None, loss_mask=None, task_mask=None, init=False, segment_ids=None,
+  def forward(self, image, mask=None, loss_mask=None, task_mask=None, init=False, segment_ids=None,
               decode=False, decode_length=None, cur_index=None, pos_ids=None):
     
     cfg = self.config

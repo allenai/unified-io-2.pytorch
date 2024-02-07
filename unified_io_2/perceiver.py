@@ -35,7 +35,7 @@ class CrossAttention(nn.Module):
     )
     self.post_mlp_droppath = layers.DropPath(droppath_rate)
 
-  def __call__(self, latents, context, mask=None):
+  def forward(self, latents, context, mask=None):
     # Cross attention block.
     assert context.ndim == 3
     assert latents.ndim == 3
@@ -94,7 +94,7 @@ class Attention(nn.Module):
     )
     self.post_mlp_droppath = layers.DropPath(droppath_rate)
 
-  def __call__(self, latents, mask=None):
+  def forward(self, latents, mask=None):
     # Self-attention block.
 
     # qkv: latents. [batch, latent_length, emb_dim]
@@ -137,7 +137,7 @@ class PerceiverResampler(nn.Module):
       else:
         self.add_module(f'layers_{lyr}', Attention(config, droppath_rate=dpr[lyr]))
 
-  def __call__(self, embed, *, mask=None):
+  def forward(self, embed, *, mask=None):
     bs, seq_len, dim = embed.shape
         
     if mask is None:
@@ -171,7 +171,7 @@ class Resampler(nn.Module):
     self.perceiver = PerceiverResampler(config)
     
     """Perceiver resampler: a stack of cross-attention layers."""
-  def __call__(self, embed, *, mask=None):
+  def forward(self, embed, *, mask=None):
     embed = self.perceiver(embed, mask=mask)
     return embed
 

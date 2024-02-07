@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
+import einops
 
 from transformers import DynamicCache
 
@@ -663,3 +664,63 @@ class MlpBlock(nn.Module):
     x = self.dropout(x)
     output = self.wo(x)
     return output
+
+
+class VectorQuantizer(nn.Module):
+  """Vector quantizer layer for VQ-VAE.
+  Derived from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py.
+
+  Attributes:
+    n_e: Number of embeddings in the codebook.
+    e_dim: Dimension of the embeddings.
+    beta: Commitment cost used in loss term, beta * ||z_e(x)-sg[e]||^2
+  """
+  def __init__(self, n_e: int, e_dim: int, beta: float = 0.25):
+    super().__init__()
+    self.n_e = n_e
+    self.e_dim = e_dim
+    self.beta = beta
+
+    self.embedding = nn.Embedding(n_e, e_dim)
+    # default_embedding_init = nn.initializers.variance_scaling(1.0, 'fan_in', 'normal', out_axis=0)
+    nn.init.kaiming_normal_(self.embedding, mode='fan_in', nonlinearity='linear')
+  
+  def get_codebook_entry(self, indices, shape=None):
+    # shape specifying (batch, height, width, channel)
+
+    # get quantized latent vectors
+    z_q = self.embedding(indices)
+
+    if shape is not None:
+      z_q = z_q.view(shape)
+      # reshape back to match original input shape
+      z_q = einops.rearrange(z_q, 'b h w c -> b c h w').contiguous()
+    
+    return z_q
+  
+  def forward(self, z: torch.Tensor):
+    # reshape z -> (batch, height, width, channel) and flatten
+    z = einops.rearrange(z, 'b c h w -> b h w c').contiguous()
+    z_flattened = z.view(-1, self.e_dim)
+    # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
+
+    d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
+        torch.sum(self.embedding.weight**2, dim=1) - 2 * \
+        torch.einsum('bd,dn->bn', z_flattened, einops.rearrange(self.embedding.weight, 'n d -> d n'))
+    
+    min_encoding_indices = torch.argmin(d, dim=1)
+    z_q = self.embedding(min_encoding_indices).view(z.shape)
+    perplexity = None
+    min_encodings = None
+
+    # compute loss for embedding
+    loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
+            torch.mean((z_q - z.detach()) ** 2)
+
+    # preserve gradients
+    z_q = z + (z_q - z).detach()
+
+    # reshape back to match original input shape
+    z_q = einops.rearrange(z_q, 'b h w c -> b c h w').contiguous()
+
+    return z_q, loss, (perplexity, min_encodings, min_encoding_indices)

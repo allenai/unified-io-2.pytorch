@@ -33,7 +33,7 @@ class EncoderLayer(nn.Module):
     self.mlp = layers.MlpBlock(dim, config.mlp_dim, config.mlp_activations,
                                intermediate_dropout_rate=config.dropout_rate)
 
-  def __call__(self, inputs, encoder_mask=None, abs_bias=None, sinusoids=None):
+  def forward(self, inputs, encoder_mask=None, abs_bias=None, sinusoids=None):
     # Attention block.
     assert inputs.ndim == 3
     x = self.pre_attention_norm(inputs)
@@ -68,7 +68,7 @@ class Encoder(nn.Module):
     self.encoder_norm = layers.RMSNorm(config.emb_dim)
     self.config = config
 
-  def __call__(self, seq: InputSequence):
+  def forward(self, seq: InputSequence):
     embed = self.drop(seq.embed)
 
     mask = layers.make_attention_mask(seq.mask, seq.mask)
@@ -113,18 +113,18 @@ class DecoderLayer(nn.Module):
     self.mlp = layers.MlpBlock(dim, config.mlp_dim, config.mlp_activations,
                                intermediate_dropout_rate=config.dropout_rate)
 
-  def __call__(self,
-               inputs,
-               encoded,
-               decoder_mask=None,
-               encoder_decoder_mask=None,
-               decoder_bias=None,
-               cross_abs_pos_bias=None,
-               decoder_sinusoids=None,
-               encoder_sinusoids=None,
-               attn_pattern_mask=None,
-               past_key_values: Optional[DynamicCache]=None
-               ):
+  def forward(self,
+              inputs,
+              encoded,
+              decoder_mask=None,
+              encoder_decoder_mask=None,
+              decoder_bias=None,
+              cross_abs_pos_bias=None,
+              decoder_sinusoids=None,
+              encoder_sinusoids=None,
+              attn_pattern_mask=None,
+              past_key_values: Optional[DynamicCache]=None
+              ):
     # inputs: embedded inputs to the decoder with shape [batch, length, emb_dim]
     x = self.pre_self_attention_norm(inputs)
 
@@ -196,7 +196,7 @@ class Decoder(nn.Module, GenerationMixin):
       pad_token_id=1
     )
 
-  def __call__(
+  def forward(
     self,
     input_ids=None,
     encoded=None,
