@@ -10,11 +10,14 @@ def _map_name(name):
   if len(parts) == 0:
     return name
 
-  if parts[0] == 'input_image_encoder':
+  if parts[0] in {'input_image_encoder', 'input_audio_encoder'}:
     # Vision transformer
-    parts[0] = "input_embedders.image"
+    if "audio" in parts[0]:
+      parts[0] = "input_embedders.audio"
+    else:
+      parts[0] = "input_embedders.image"
 
-    if name == "input_image_encoder.image_encoder.vision_transformer.class_embedding":
+    if ".class_embedding." in name:
       transpose = True
 
     if len(parts) > 3 and parts[3] == "Transformer_0":
@@ -40,8 +43,16 @@ def _map_name(name):
     if parts[-1] == "kernel":
       parts[-1] = "weight"
       transpose = True
-    if parts[-2] in {"pre_ln", "ln_1", "ln_2"} and parts[-1] == "scale":
+    if parts[-2] == "norm1":
+      parts[-2] = "ln_1"
+    elif parts[-2] == "norm2":
+      parts[-2] = "ln_2"
+    if parts[-2] in {"pre_ln", "ln_1", "ln_2", "lin_2", "lin_1"} and parts[-1] == "scale":
       parts[-1] = "weight"
+    if parts[-1] == "pos_embed":
+      parts[-1] = "positional_embedding"
+    # if parts[-2] in {"pre_ln", "ln_1", "ln_2"} and parts[-1] == "scale":
+    #   parts[-1] = "weight"
     return ".".join(parts), transpose
 
   if parts[0] == "input_text_encoder":
@@ -86,6 +97,9 @@ def load_checkpoint(
   if "image" in input_modalities:
     prefixes.append("image_token_embedder")
     prefixes.append("input_image_encoder")
+  if "audio" in input_modalities:
+    prefixes.append('audio_token_embedder')
+    prefixes.append('input_audio_encoder')
   if "image" in target_modalities:
     raise ValueError()
 
