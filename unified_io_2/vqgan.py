@@ -16,6 +16,7 @@ def Normalize(in_channels):
 class ResBlock(nn.Module):
   def __init__(self, n_in: int, n_out: int):
     """ResNet Block"""
+    super().__init__()
     self.norm1 = Normalize(n_in)
     self.nonlinear = nn.SiLU()
     self.conv1 = nn.Conv2d(n_in, n_out, kernel_size=3, stride=1, padding=1)
@@ -43,6 +44,7 @@ class ResBlock(nn.Module):
 class AttnBlock(nn.Module):
   def __init__(self, n_in: int):
     """Single head self-attention layer"""
+    super().__init__()
     self.norm = nn.GroupNorm(num_groups=32, num_channels=n_in, eps=1e-06)
     self.q = nn.Conv2d(n_in, n_in, kernel_size=1, stride=1, padding=0)
     self.k = nn.Conv2d(n_in, n_in, kernel_size=1, stride=1, padding=0)
@@ -75,6 +77,7 @@ class AttnBlock(nn.Module):
 class Downsample(nn.Module):
   def __init__(self, n_in):
     """Downsampling layer"""
+    super().__init__()
     # no asymmetric padding in torch conv, must do it ourselves
     self.conv = nn.Conv2d(n_in, n_in, kernel_size=3, stride=2, padding=0)
   
@@ -89,6 +92,7 @@ class Downsample(nn.Module):
 class Upsample(nn.Module):
   def __init__(self, n_in):
     """Upsampling layer"""
+    super().__init__()
     self.conv = nn.Conv2d(n_in, n_in, kernel_size=3, stride=1, padding=1)
   
   def forward(self, x):
@@ -100,6 +104,7 @@ class Upsample(nn.Module):
 
 class Encoder(nn.Module):
   def __init__(self, config: VQGANConfig):
+    super().__init__()
     self.config = config
     cfg = self.config
 
@@ -169,6 +174,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
   def __init__(self, config: VQGANConfig):
+    super().__init__()
     self.config = config
     cfg = self.config
 
@@ -246,6 +252,7 @@ class Decoder(nn.Module):
 class VQGAN(nn.Module):
   def __init__(self, config: VQGANConfig):
     """VQGAN"""
+    super().__init__()
     self.config = config
     cfg = self.config
     self.embed_dim = cfg.embed_dim
