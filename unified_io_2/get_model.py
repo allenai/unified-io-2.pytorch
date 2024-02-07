@@ -134,7 +134,7 @@ def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, U
 if __name__ == "__main__":
   # TODO remove for release
   import torch
-  print("Building and Initiazling pytorch uio2-xxl-3M, all modalities to image/text...")
+  print("Building and Initializing pytorch uio2-xxl-3M, all modalities to image/text...")
   model_config = config.XXL
   model_config.target_modalities = tuple(['text', 'image'])
   input_encoders = get_input_modalities(
@@ -144,11 +144,20 @@ if __name__ == "__main__":
   )
   target_encoders = get_target_modalities(
     model_config.target_modalities, model_config.image_vqgan, model_config.audio_vqgan)
+  print("Instantiating uio2-xxl, all modalities to image/text...")
   model = UnifiedIO(model_config.t5_config, input_encoders, target_encoders)
-  # model.load_state_dict(torch.load("/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-text.pth"))
-  # model.eval()
+  from unified_io_2.convert_checkpoint import load_checkpoint
+  print("Loading and converting numpy xxl-3M model to pytorch model state dict...")
+  ckpt = load_checkpoint(
+    "/home/sanghol/projects/unified-io-2.pytorch/checkpoints/unified-io-2_xxl_instructional_tunning_3M.npz",
+    input_modalities=('text', 'image', 'image_history', 'audio', 'audio_history'),
+    target_modalities=('text', 'image'),
+  )
+  print("Initializing the model with the loaded state dict...")
+  model.load_state_dict(ckpt)
+  model.eval()
 
   import pdb; pdb.set_trace()
 
   # print("Saving it as a pytorch ckpt file...")
-  # torch.save(model.state_dict(), "/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-text.pth")
+  # torch.save(model.state_dict(), "/home/sanghol/projects/unified-io-2.pytorch/checkpoints/xxl-3m-all-image_text-random.pth")

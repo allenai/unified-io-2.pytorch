@@ -76,6 +76,21 @@ def _map_name(name):
 
   if parts[0] == "target_encoders_text":
     parts[0] = "target_embedders.text"
+  
+  if parts[0] == "target_encoders_image":
+    # image target encoder translation
+    parts[0] = "target_embedders.image"
+    if parts[1] == "discrete_vae":
+      parts[1] = "vqgan"
+      if parts[2] == "quantize":
+        parts.append("weight")
+      elif parts[-2].startswith("norm"):
+        if parts[-1] == "scale":
+          parts[-1] = "weight"
+      elif parts[-1] == "kernel":
+        parts[-1] = "weight"
+        transpose = (3, 2, 0, 1)
+
 
   if parts[-2] == "attention":
     parts[-1] = "weight"
@@ -99,6 +114,17 @@ def convert_params(params):
   return mapped_params
 
 
+def flatten_dict(src, prefix, out):
+  if isinstance(src, dict):
+    for k, v in src.items():
+      flatten_dict(v, prefix + "." + k, out)
+  elif isinstance(src, np.ndarray) and src.dtype == np.object_:
+    flatten_dict(src.item(), prefix, out)
+  else:
+    out[prefix] = src
+  return {k.lstrip("."): v for k, v in out.items()}
+
+
 def load_checkpoint(
     checkpoint, input_modalities=("text",), target_modalities=("text",)):
   prefixes = [
@@ -107,21 +133,22 @@ def load_checkpoint(
     'input_text_encoder', 'target_encoders_text',
   ]
   if "image" in input_modalities:
-    prefixes.append("image_token_embedder")
     prefixes.append("input_image_encoder")
   if "audio" in input_modalities:
-    prefixes.append('audio_token_embedder')
     prefixes.append('input_audio_encoder')
   if "audio_history" in input_modalities:
     prefixes.append('input_encoders_audio_history')
   if "image_history" in input_modalities:
     prefixes.append('input_encoders_image_history')
   if "image" in target_modalities:
+    prefixes.append('target_encoders_image')
+  if "audio" in target_modalities:
     raise ValueError()
 
   if checkpoint.endswith(".npz"):
-    params = np.load(checkpoint)
+    params = np.load(checkpoint, allow_pickle=True)
     params = {k: params[k] for k in params if any(k.startswith(x) for x in prefixes)}
+    params = flatten_dict(params, '', {})
     mapped_params = convert_params(params)
   else:
     raise NotImplementedError()
