@@ -9,9 +9,9 @@ import numpy as np
 from unified_io_2.data_utils import trim_or_pad_tf, make_autoregressive_inputs
 from unified_io_2.input_modalities import ModalityEncoder
 from unified_io_2.seq_features import TargetSequence
-# from unified_io_2.dvitvqgan import ViTVQGAN, MlpBlock
+from unified_io_2.vqgan import VQGAN
 from unified_io_2.config import *
-from unified_io_2 import layers, config
+from unified_io_2 import layers, config, seq_features
 import tensorflow as tf
 
 
@@ -111,7 +111,166 @@ class TargetTextEncoder(ModalityEncoder):
     return TextEmbedder(config)
 
 
-class TargetImageDVAEEmbedder(ModalityEncoder):
+def _init_mask(height, width, is_bool_mask=False):
+  attn_size = height * width
+  mask = torch.tril(torch.ones(attn_size, attn_size, dtype=torch.bool if is_bool_mask else torch.float32))
+  return mask
+
+
+def get_row_mask(height=32, width=32, is_bool_mask=False):
+  mask = _init_mask(height, width, is_bool_mask=is_bool_mask)
+  step = width + 1
+  for col in range(mask.shape[1]):
+      mask[col + step:, col] = False if is_bool_mask else 0.0
+  return mask  
+
+
+def get_col_mask(height=32, width=32, is_bool_mask=False):
+  mask = _init_mask(height, width, is_bool_mask=is_bool_mask)
+  step = width - 1
+  for col in range(mask.shape[1]):
+      for i in range(1, mask.shape[0], step+1):
+          mask[col + i: col + i + step, col] = False if is_bool_mask else 0.0
+  return mask
+
+
+def get_conv_mask(height=32, width=32, kernel=11, is_bool_mask=False, hf_version='v3'):
+  mask = _init_mask(height, width, is_bool_mask=is_bool_mask)
+  shift = kernel // 2
+  for pos in range(mask.shape[1]):
+    mask[pos+1:, pos] = False if is_bool_mask else 0.0
+    img = torch.zeros([height, width])
+    pixel_id = pos
+    row = pixel_id // width
+    col = pixel_id % width
+    for r in range(-shift, shift+1):
+      for c in range(-shift, shift+1):
+        c_abs = max(min(c + col, width - 1), 0)
+        r_abs = max(min(r + row, height - 1), 0)
+        img[r_abs, c_abs] = 0.2
+        cell_id = r_abs * width + c_abs
+        if  cell_id > pos:
+          mask[cell_id, pos] = True if is_bool_mask else 1.0
+    img[row, col] = 1.0
+  return mask
+
+
+class ImageViTVQGAN(nn.Module):
+  def __init__(self, config: T5Config, vqgan_config: VQGANConfig):
+    super().__init__()
+    self.config = config
+    self.vqgan_config = vqgan_config
+
+    cfg = self.config
+    vqgan_cfg = self.vqgan_config
+    self.grid_size = [
+        self.config.default_image_size[0] // self.vqgan_config.patch_size[0],
+        self.config.default_image_size[1] // self.vqgan_config.patch_size[1],
+    ]
+
+    if cfg.image_tokenizer_type == 'vqgan':
+      self.vqgan = VQGAN(vqgan_config)
+    
+    # construct the row, col and conv mask.
+    row_mask = get_row_mask(self.grid_size[0], self.grid_size[1])
+    col_mask = get_col_mask(self.grid_size[0], self.grid_size[1])
+    conv_mask = get_conv_mask(self.grid_size[0], self.grid_size[1])
+    full_mask = _init_mask(self.grid_size[0], self.grid_size[1])
+
+    self.register_buffer(
+      "attn_mask", torch.stack([row_mask, col_mask, conv_mask, full_mask], dim=0), persistent=False)
+    
+    self.register_buffer("pos_emb_cache", layers.get_2d_position_embedding(
+        cfg.image_pos_emb,
+        vqgan_cfg.default_input_size,
+        vqgan_cfg.patch_size,
+        cfg.emb_dim,
+        cfg.head_dim,
+        2), persistent=False)
+    
+    if "llama_rope" in cfg.image_pos_emb:
+      self.modality_embedding = nn.Parameter(torch.empty(cfg.emb_dim).normal_(std=0.02))
+    
+  def target_image_to_seq(self, image: torch.Tensor, loss_mask: torch.Tensor = None):
+    cfg = self.config
+    bs = image.shape[0]
+
+    # reshape image to (batch, channel, height, width)
+    image = image.permute(0, 3, 1, 2).contiguous()
+    target_tokens = self.vqgan.get_codebook_indices(image)
+
+    # 0: start token
+    # 1: [MASK] token
+    # from 2: normal tokens
+    target_tokens = target_tokens + 2
+    target_tokens = target_tokens.detach()
+
+    input_tokens = torch.cat([
+      torch.zeros((target_tokens.shape[0], 1), dtype=torch.int32, device=target_tokens.device),
+      target_tokens[:, :-1]], dim=1)
+    
+    return input_tokens, target_tokens, loss_mask
+
+  def get_target_sequence(self, input_tokens, shared_embed, mask, target_tokens=None, task_mask=None,
+                          loss_mask=None, segment_ids=None, cur_index=None, pos_ids=None):
+    cfg = self.config
+    vqgan_cfg = self.vqgan_config
+    bs = input_tokens.shape[0]
+
+    x = shared_embed(input_tokens)
+
+    if cur_index is not None:
+      pos_emb = self.pos_emb_cache[cur_index:cur_index+1,:][None, :, :]
+    else:
+      pos_emb = self.pos_emb_cache[:x.shape[1]][None, :, :]
+    
+    pos_emb = pos_emb.expand(bs, -1, -1)
+
+    if "llama_rope" in cfg.image_pos_emb:
+      x += self.modality_embedding[None, None, :].to(x.dtype)
+
+    if mask is None:
+      mask = torch.ones(x.shape[0], x.shape[1], dtype=torch.int32, device=x.device)
+
+    if cfg.dalle_attn_mask:
+      attn_pattern_mask = self.attn_mask[None,:,:,:].expand(x.shape[0], -1, -1, -1)
+    else:
+      # use full mask if we are not using dalle attn mask.
+      attn_pattern_mask = self.attn_mask[None,-1,:,:].expand(x.shape[0], 4, -1, -1)
+
+    # task_mask: 1 if we should mask the corresponding token
+    if cfg.dynamic_unk_mask and task_mask is not None:
+      noise_mask = 1 - task_mask
+      # shift the mask by 1
+      noise_mask = torch.cat([
+        torch.ones(noise_mask.shape[0], 1, dtype=noise_mask.dtype, device=noise_mask.device),
+        noise_mask[:, :-1]], dim=1)
+      dynamic_unk_mask = layers.make_attention_mask(noise_mask, noise_mask)
+      identity_mask = torch.eye(x.shape[1], dtype=dynamic_unk_mask.dtype, device=dynamic_unk_mask.device)
+      dynamic_unk_mask = torch.logical_or(dynamic_unk_mask, identity_mask)
+      attn_pattern_mask = layers.combine_masks(dynamic_unk_mask, attn_pattern_mask).to(attn_pattern_mask.dtype)
+
+    modality_id = torch.full((), IMAGE_MODALITY_INDEX, device=x.device, dtype=torch.int32)
+    seq = TargetSequence(
+      x, pos_emb, modality_id, mask, attn_pattern_mask=attn_pattern_mask,
+      subsegments=segment_ids, target_tokens=target_tokens, loss_mask=loss_mask)
+    
+    return seq
+
+  def forward(self, image, shared_embed, mask=None, loss_mask=None, task_mask=None, segment_ids=None,
+              cur_index=None, pos_ids=None):
+    
+    cfg = self.config
+    if cur_index is not None:
+      return self.get_target_sequence(image, mask, shared_embed, segment_ids, cur_index=cur_index)
+    else:
+      input_tokens, target_tokens, loss_mask = self.target_image_to_seq(image, loss_mask)
+
+      return self.get_target_sequence(input_tokens, shared_embed, mask, target_tokens, task_mask,
+                                      loss_mask, segment_ids, pos_ids=pos_ids)
+
+
+class TargetImageVQGANEmbedder(ModalityEncoder):
   def __init__(self, config):
     super().__init__()
     self.config = config
@@ -188,33 +347,6 @@ class TargetImageDVAEEmbedder(ModalityEncoder):
 
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ImageViTVQGAN(config, self.config)
-
-
-class ImageViTVQGAN(nn.Module):
-  def __init__(self, config, vqgan_config, embedding_layer):
-    super().__init__()
-    self.config = config
-
-  def target_image_to_seq(self, image, loss_mask=None, init=False,
-                          task_mask=None):
-    pass
-
-  def get_target_sequence(self, input_tokens, mask, target_tokens=None, task_mask=None,
-                          loss_mask=None, segment_ids=None, cur_index=None, pos_ids=None):
-    pass
-
-  def forward(self, image, mask=None, loss_mask=None, task_mask=None, init=False, segment_ids=None,
-              decode=False, decode_length=None, cur_index=None, pos_ids=None):
-    
-    cfg = self.config
-    if decode:
-      return self.get_target_sequence(image, mask, segment_ids, cur_index=cur_index)
-    else:
-      input_tokens, target_tokens, loss_mask = self.target_image_to_seq(
-          image, loss_mask, init, task_mask)
-
-      return self.get_target_sequence(input_tokens, mask, target_tokens, task_mask,
-                                      loss_mask, segment_ids, pos_ids=pos_ids)
 
 
 class TargetAudioDVAEEmbedder(ModalityEncoder):

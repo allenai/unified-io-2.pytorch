@@ -148,8 +148,6 @@ class T5Config:
 
   dynamic_unk_mask: bool = True
   dalle_attn_mask: bool = True
-  shift_back_input_token: bool = False
-  unk_mask_token: bool = False
   
   num_seg_emb: int = 4
   use_drop_path: bool = False
