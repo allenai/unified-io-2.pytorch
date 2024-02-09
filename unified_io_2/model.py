@@ -482,10 +482,8 @@ class UnifiedIO(nn.Module, GenerationMixin):
       # Need this many tokens to get a complete image/audio output
       if modality == "image":
         kwargs["max_new_tokens"] = 1024
-        kwargs["min_new_tokens"] = 1024
       else:
         kwargs["max_new_tokens"] = 512
-        kwargs["min_new_tokens"] = 512
 
     if negative_prompt is not None:
       joint_batch = {}
@@ -534,6 +532,8 @@ class UnifiedIO(nn.Module, GenerationMixin):
 
     if modality == "image":
       tokens = tokens[:, 1:]  # remove BOS
+      if tokens.shape[1] != 1024:
+        raise ValueError("Did not generate a full image")
       tokens = tokens - 2
       # Our output tokens can include values not supported by the VQGAN, those value should
       # never be predicted by a trained model, but clip here to be safe
