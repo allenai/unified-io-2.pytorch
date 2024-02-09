@@ -58,6 +58,8 @@ class UnifiedIOPreprocessing:
 
     Args:
       target_modality: image, audio or text, the target output modality
+
+      # inputs
       text_inputs: String text inputs
       box_input: [x1, y1, x2, y2] pixel coordinates relative to image_inputs, this box
                  will be tokenized and replace the keyword ``{box}` in text_inputs
@@ -66,12 +68,12 @@ class UnifiedIOPreprocessing:
       video_inputs: RGB by time video in float32 format or video file
       use_video_audio: Extract audio from the `video_inputs``
       encode_frame_as_image: If given a video, encode the last/first frame of that video as an image
-      encode_audio_segment_as_audio: If given muliple audio segments, encode this segment as audio input
+      encode_audio_segment_as_audio: Encode this audio segment with the audio modality
 
       # Targets
       text_targets: String text targets
       image_targets: RGB image or image file
-      audio_targets: Audio spectrograms in [256, 128] format or audio file or < 4.08 seconds
+      audio_targets: Audio spectrograms in [256, 128] format or audio file of < 4.08 seconds
 
       # Other
       is_training: Do rescaling augmentation
@@ -105,7 +107,7 @@ class UnifiedIOPreprocessing:
 
     if video_inputs:
       if image_inputs is None:
-        encode_frame_as_image = None
+        assert encode_frame_as_image is None
 
       max_frame = self.sequence_length["num_frames"]
       if encode_frame_as_image is not None:
@@ -147,7 +149,6 @@ class UnifiedIOPreprocessing:
       if video_audio is not None and audio_inputs is not None:
         raise ValueError("Have audio from both the video and as `audio_inputs`")
       if isinstance(audio_inputs, str):
-        # TODO load audio file
         spectograms = load_audio(audio_inputs)
       elif isinstance(audio_inputs, np.ndarray):
         spectograms = audio_inputs
@@ -185,7 +186,7 @@ class UnifiedIOPreprocessing:
     if box_inputs:
       resized_boxes = resize_meta[2]
       if len(resized_boxes) == 0:
-        # Can happen if `is_training=True` and the box get cropped during rescaling augmentation
+        # Can happen if `is_training=True` and the box gets cropped during rescaling augmentation
         return None
       box_text = values_to_tokens(resized_boxes / image_inputs.shape[0])
       assert "{box}" in text_inputs

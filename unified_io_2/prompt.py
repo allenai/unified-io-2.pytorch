@@ -260,6 +260,96 @@ PROMPT_DICT['audio_caption']['original'] = [
   'In brief, what is this sound?'
 ]
 
+PROMPT_DICT['image_generation_coco_2017'] = dict(
+  original=['Generate an image matching this text: {}'],
+  manual=[
+    'What image corresponds to the text description "{}"?',
+    'Complete the image corresponding to the caption: "{}"',
+    'What image can be described as "{}"?',
+    'Construct a picture that could have this caption: {}"?',
+    'Text: {}\nGenerate an image that matches the text.',
+    'Draw an image that can be described as "{}".',
+    'Draw an image that could be captioned "{}".',
+    'Generate an image that could be captioned "{}".',
+    'Caption: {}\nWhat is an image that matches the caption?',
+    'What might \"{}\" look like?',
+    'Generate an image of {}',
+    'Generate a picture of {}',
+    'Scene: {}\nInstruction: Please draw the scene',
+  ],
+  gpt=[
+    'Draw an image that matches the caption "{}"',
+    'Illustrate an image that aligns with the description "{}".',
+    'Create an image that might be captioned as "{}".',
+    'Conceive an image that would suit the caption "{}".',
+    'Fabricate an image with a possible caption of "{}".',
+    'Render an image that matches {}.',
+  ]
+)
+
+
+PROMPT_DICT['Surface_Normals_Estimation'] = dict(
+  original=[
+    'What is the surface normal of the image ?'
+  ],
+  manual=[
+    'Generate an image depicting the surface normal at each pixel of the input image.',
+    'Generate an image representing the orientation of the surface at each pixel.'
+  ],
+  gpt3=[
+    'Create an image that shows the orientation of the surface at each pixel.',
+    'Generate an image that indicates the orientation of the surface at each pixel.',
+    'Make an image that displays the orientation of the surface at every pixel.',
+    'Generate the surface normals of this image.',
+    "Could you determine the surface normal of the picture?",
+    "Produce the surface normals for this image.",
+    "Find the surface normals for this particular image.",
+    "Can you ascertain the surface normal for this image?",
+    "What would be the surface normal for this picture?",
+    "Determine the surface normal of the image.",
+    "Could you establish the surface normals for this picture?",
+    "What's the image's surface normal?",
+    "Make the surface normals for this image.",
+    "Could you tell me the surface normal for this image?",
+    "Formulate the surface normals for this image.",
+    "Can you identify the surface normal in the image?",
+    "Compute the surface normals for this image.",
+    "What is the normal vector for the image surface?",
+    "Construct the surface normals for this given image.",
+    "What's the normal direction for the image surface?",
+  ]
+)
+
+
+PROMPT_DICT["Detection_Generic"] = dict(
+  original=['List all objects and their locations in the image'],
+  manual=[
+    'Enumerate the objects in the picture. For each one, list its category and bounding box.',
+    'Locate all objects in the image.',
+    'Detect all of the objects in the image.',
+    'Detect all of the objects in <image_input>.',
+    'Find all the objects.',
+    'Find regions of all of the objects in the image.',
+    'There are one or more objects in this image. Find the regions corresponding to each of them.',
+    'For each object in the image, return the object category and bounding box',
+    "Perform object detection by returning a class and bounding box for each object in this image"
+  ]
+)
+
+
+PROMPT_DICT["Detection_COCO"] = dict(
+  original=["Find the COCO objects."],
+  manual=[
+    'List the COCO objects and their locations in the image',
+    'Locate all COCO objects in the image.',
+    'Detect all of the COCO objects in the image.',
+    'Find all the COCO objects.',
+    'Find regions of all of the COCO objects in the image.',
+    'There are one or more COCO objects in this image. Find the regions corresponding to each of them.',
+    'For COCO object in the image, return the object category and bounding box'
+  ]
+)
+
 
 class Prompt:
   def __init__(self, original_flag=True, manual_flag=True,

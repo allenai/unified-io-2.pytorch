@@ -10,8 +10,9 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from unified_io_2.config import Config, T5Config
 from unified_io_2 import seq_features, layers
+from unified_io_2.runner import ClfFreeGuidanceProcessor
 from unified_io_2.seq_features import InputSequence
-from unified_io_2.utils import unflatten_dict
+from unified_io_2.utils import unflatten_dict, pad_and_cat
 
 
 class EncoderLayer(nn.Module):
@@ -193,12 +194,15 @@ class Decoder(nn.Module, GenerationMixin):
       eos_token_id=1,
       # We generally use 0 for padding, but having pad==bos triggesrs a superfluous
       # warning from GenerationMixin so we just tell it to use 1 to keep it quiet
-      pad_token_id=1
+      pad_token_id=1,
+
+      # TODO these seems to produce warnings, can we prevent them?
+      top_k=None,
+      length_penalty=0
     )
 
   def forward(
     self,
-    input_ids=None,
     encoded=None,
     decoder_embedding=None,
     decoder_pos_emb=None,
@@ -209,6 +213,7 @@ class Decoder(nn.Module, GenerationMixin):
     attn_pattern_mask=None,
 
     # Use for inference
+    input_ids=None,
     past_key_values: Optional[DynamicCache] = None,
     return_dict=False,
     output_attentions=False,
@@ -277,10 +282,29 @@ class Decoder(nn.Module, GenerationMixin):
     else:
       return y
 
+  def _expand_inputs_for_generation(
+      self,
+      expand_size: int = 1,
+      is_encoder_decoder: bool = False,
+      input_ids: Optional[torch.LongTensor] = None,
+      logit_weights=None,
+      **model_kwargs,
+    ) -> Tuple[torch.LongTensor]:
+    ix, args = super()._expand_inputs_for_generation(
+      expand_size, is_encoder_decoder, input_ids, **model_kwargs)
+    args["logit_weights"] = logit_weights  # Don't expand the `logit_weights` tensor
+    return ix, args
+
   def prepare_inputs_for_generation(
       self, input_ids, encoder_pos_emb, encoded, encoder_mask, modality, use_cache,
-      embed_token_id, logit_weights, past_key_values=None, attention_mask=None
+      embed_token_id, logit_weights, past_key_values=None, attention_mask=None,
+      _clf_free_guidance=False
   ):
+    if _clf_free_guidance:
+      # Ignore the sampled ids for the guidance batches and just use ones for the main batch
+      n = input_ids.shape[0] // 2
+      input_ids = torch.cat([input_ids[:n], input_ids[:n]], 0)
+
     cfg = self.config
     device = input_ids.device
     cur_index = input_ids.shape[1] - 1
@@ -378,23 +402,23 @@ class UnifiedIO(nn.Module, GenerationMixin):
 
   @torch.no_grad()
   def score_answer_options(
-      self, batch, options, batch_size=None, average_loss=True):
+      self, batch, options, option_batch_size=None, average_loss=True):
     """Scores multiple answers options for one set of inputs
 
     Args:
       batch: batch of inputs with batch size 1, targets in this batch are ignored
       options: Tensor of tokenized text answer options, includes EOS but not BOS and padded with 0
-      batch_size: Compute answers for batches at a time to reduce memory
+      option_batch_size: Compute answers for batches of options at a time to reduce memory
       average_loss: Do average loss per token instead of total loss
 
     Returns:
       The scores of each answer option
     """
-    if batch_size is None:
-      batch_size = len(options)
+    if option_batch_size is None:
+      option_batch_size = len(options)
       n_batches = 1
     else:
-      n_batches = (batch_size -1 + len(options)) // batch_size
+      n_batches = (option_batch_size - 1 + len(options)) // option_batch_size
 
     # Shift right and add BOS
     input_tokens = torch.cat([
@@ -406,7 +430,7 @@ class UnifiedIO(nn.Module, GenerationMixin):
       input_tokens, mask=options > 0, shared_embed=self.text_token_embedder)
 
     batch = unflatten_dict(batch)
-    input_seq = self.encode_batch(batch["inputs"], False)
+    input_seq = self.encode_batch(batch["inputs"])
     if input_seq.batch_size != 1:
       raise NotImplementedError("Only batch 1 supported")
     encoder_hidden = self.encoder(input_seq)
@@ -417,7 +441,7 @@ class UnifiedIO(nn.Module, GenerationMixin):
 
     all_loses = []
     for batch_i in range(n_batches):
-      sl = slice(batch_i*batch_size, (batch_i+1)*batch_size)
+      sl = slice(batch_i * option_batch_size, (batch_i + 1) * option_batch_size)
       mask = target_seq.mask[sl]
       bs = mask.shape[0]
       out_hidden = self.decoder(
@@ -448,34 +472,84 @@ class UnifiedIO(nn.Module, GenerationMixin):
       self,
       batch,
       modality="text",
+      negative_prompt=None,
+      guidance_scale=10,
       **kwargs,
   ):
+    if modality != "text":
+      if kwargs.get("max_new_tokens") is not None or kwargs.get("min_new_tokens") is not None:
+        raise ValueError("non-text modalities cannot set generation length")
+      # Need this many tokens to get a complete image/audio output
+      if modality == "image":
+        kwargs["max_new_tokens"] = 1024
+        kwargs["min_new_tokens"] = 1024
+      else:
+        kwargs["max_new_tokens"] = 512
+        kwargs["min_new_tokens"] = 512
+
+    if negative_prompt is not None:
+      joint_batch = {}
+      assert set(negative_prompt) == set(batch)
+      for k, neg_v in negative_prompt.items():
+        batch_v = batch[k]
+        if neg_v.shape[0] == 1 and batch_v.shape[0] != 1:
+          # One negative batch of all input examples
+          # This is a bit wasteful, but for now just encode the same negative prompt multiple times
+          neg_v = neg_v.expand(*([batch_v.shape[0]] + [-1]*(len(batch_v.shape)-1)))
+        elif batch[k].shape[0] != negative_prompt[k].shape[0]:
+          raise ValueError("Negative prompt must have mismistached batch sizes")
+        joint_batch[k] = pad_and_cat(batch_v, neg_v)
+      batch = joint_batch
+      processors = kwargs.get("logits_processor", [])
+      processors.append(ClfFreeGuidanceProcessor(alpha=guidance_scale))
+      kwargs["logits_processor"] = processors
+      kwargs["_clf_free_guidance"] = True
+
     batch = unflatten_dict(batch)
     input_seq = self.encode_batch(batch["inputs"])
-    encoder_hidden = self.encoder(input_seq)
 
-    bs = input_seq.batch_size
+    encoder_hidden = self.encoder(input_seq)
+    mask, pos = input_seq.mask, input_seq.position_embed
+
+    bs = mask.shape[0]
     input_ids = torch.zeros((bs, 1), dtype=torch.long, device=input_seq.embed.device)
 
     def embed_token_id(input_id, mask, cur_index=None):
       return self.target_embedders[modality](
-        input_id, mask=mask, cur_index=cur_index, shared_embed=self.shared_embedding[modality])
+          input_id, mask=mask, cur_index=cur_index, shared_embed=self.shared_embedding[modality])
 
-    return self.decoder.generate(
+    tokens = self.decoder.generate(
       **kwargs,
       modality=modality,
       input_ids=input_ids,
       logit_weights=self.shared_embedding[modality].weight,
       embed_token_id=embed_token_id,
-      encoder_pos_emb=input_seq.position_embed,
+      encoder_pos_emb=pos,
       encoded=encoder_hidden,
-      encoder_mask=input_seq.mask,
+      encoder_mask=mask,
     )
+
+    if negative_prompt:
+      tokens = tokens[:tokens.shape[0]//2]
+
+    if modality == "image":
+      tokens = tokens[:, 1:]  # remove BOS
+      tokens = tokens - 2
+      # Our output tokens can include values not supported by the VQGAN, those value should
+      # never be predicted by a trained model, but clip here to be safe
+      tokens = torch.clip(tokens, 0, self.target_embedders["image"].vqgan.config.n_embed-1)
+      images = self.target_embedders["image"].vqgan.decode_code(tokens)
+      images = torch.clip((images+1)/2, 0, 1)
+      images = torch.permute(images, [0, 2, 3, 1])
+      # TODO handle return output dictionary
+      return images
+    return tokens
 
   def encode_batch(self, input_features):
     input_parts: List[InputSequence] = []
     for k, v in self.input_embedders.items():
-      input_parts.append(v(**input_features[k], shared_embed=self.shared_embedding.get(k)))
+      if k in input_features:
+        input_parts.append(v(**input_features[k], shared_embed=self.shared_embedding.get(k)))
     input_seq = seq_features.concat_sequences(input_parts)
     return input_seq
 

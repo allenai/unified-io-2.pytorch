@@ -6,13 +6,14 @@ import tensorflow as tf
 from typing import List
 
 import torch
+from PIL import Image
 from transformers import LogitsProcessor
 
 from unified_io_2 import config
 from unified_io_2.modality_processing import UnifiedIOPreprocessing
 from unified_io_2.prompt import Prompt
 from unified_io_2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
-  extra_id_to_float, extract_locations_from_token_ids
+  extra_id_to_float, extract_locations_from_token_ids, undo_image_process
 
 HUMAN_POSE_PART = [
   "nose", "left eye", "right eye", "left ear", "right ear", "left shoulder",
@@ -21,13 +22,30 @@ HUMAN_POSE_PART = [
 
 part_name_re = re.compile(r"<extra_id_([0-9]+)> <extra_id_([0-9]+)> ([a-z ]+)")
 
+labelled_box_re = re.compile(
+  r"<extra_id_([0-9]+)> <extra_id_([0-9]+)> <extra_id_([0-9]+)> <extra_id_([0-9]+)> ([a-z ]+)")
+
+
+class ClfFreeGuidanceProcessor(LogitsProcessor):
+  """Apply CLF Free Guidance assuming the bottom half of the score are from the guidance batches"""
+  def __init__(self, alpha):
+    self.alpha = alpha
+
+  def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+    scores = torch.log_softmax(scores, -1)
+    n = scores.shape[0] // 2
+    guidance_scores = scores[n:]
+    main_scores = scores[:n]
+    out = (1 + self.alpha) * main_scores - self.alpha * guidance_scores
+    return torch.cat([out, out], 0)
+
 
 class ForceKeypointPrediction(LogitsProcessor):
-  """Force a valid keyponit prediction from the model that
+  """Force a keypoint prediction from the model that makes a guess for every point
 
   During training, we don't train the model to predict coordinates for invisible keypoints,
-  but during inference it is helpful to force to make a guess for every point since the
-  KP metric does not penalize you for making in correct guess for an invisible point
+  but during inference it is helpful to make a guess for every point since the
+  KP metric does not penalize you for guessing at an invisible point
   """
 
   def __init__(self, tokenizer):
@@ -53,6 +71,17 @@ class ForceKeypointPrediction(LogitsProcessor):
       scores = scores*0
       scores[:, mask] = 1000
     return scores
+
+
+def extract_labelled_boxes(text):
+  labels = []
+  boxes = []
+  for y1, x1, y2, x2, name in labelled_box_re.findall(text):
+    labels.append(name)
+    boxes.append([int(y1), int(x1), int(y2), int(x2)])
+  if boxes:
+    boxes = extra_id_to_float(np.array(boxes))
+  return boxes, labels
 
 
 def extract_keypoints(text, image_info):
@@ -104,6 +133,12 @@ def extract_keypoints(text, image_info):
 
 
 class PredictBoxesPreprocessor(LogitsProcessor):
+  """Force the model to predict a location tokens if the total probability mass on
+  all locations > then a threshold.
+
+  Used to prevent a bias towards short sequence caused by EOS becoming the most probable tokens
+  when probability mass gets spread out over many location tokens
+  """
   def __init__(self, thresh=0.5, require_one_box=False):
     self.require_one_box = require_one_box
     self.thresh = thresh
@@ -114,13 +149,15 @@ class PredictBoxesPreprocessor(LogitsProcessor):
     probs = torch.exp(torch.logsumexp(logits[:, 32000:33000], dim=-1))
     use_loc = probs > self.thresh
     if use_loc:
-      # High total probability on location tokens, so Force a location token prediction
       scores[:, :32000] = -10000
       scores[:, 33000:] = -10000
     if self.require_one_box and input_ids.shape[1] == 1:
       # Prevent starting with EOS
-      scores[:, 1] = -10000
+      scores[:, config.EOS_ID] = -10000
     return scores
+
+
+IMAGE_CLF_FREE_PROMPT = "An image of a random picture."
 
 
 class TaskRunner:
@@ -143,19 +180,20 @@ class TaskRunner:
   def tokenizer(self):
     return self.uio2_preprocessor.tokenizer
 
+  def singleton_batch(self, batch):
+    return {k: torch.as_tensor(v, device=self.device)[None, ...] for k, v in batch.items()}
+
   @property
   def device(self):
     return self.model.device
 
-  def predict_text(self, batch, max_tokens, detokenize=True, **gen_args):
-    device = self.model.device
-    batch = {k: torch.as_tensor(v, device=device)[None, ...] for k, v in batch.items()}
+  def predict_text(self, example, max_tokens, detokenize=True, **gen_args):
     tokens = self.model.generate(
-      batch=batch, modality="text",
+      batch=self.singleton_batch(example), modality="text",
       use_cache=True, max_new_tokens=max_tokens,
       **gen_args
     )
-    tokens = tokens[0]
+    tokens = tokens[0].cpu()
     if detokenize:
       return self.tokenizer.decode(tokens)
     else:
@@ -176,9 +214,9 @@ class TaskRunner:
     tokens = self.predict_text(batch, max_tokens=6, detokenize=False)
     if len(tokens) != 6 or (tokens[0] != 0) or (tokens[-1] != 1):
       raise ValueError(f"Output not a bounding box {tokens}")
-    box = np.array([token_to_float(int(i)) for i in tokens[1:-1]])  # tokens -> reals
+    box = token_to_float(np.array(tokens[1:-1]))
     box *= config.IMAGE_INPUT_SIZE[0]  # de-normalized w.r.t the preprocessed image
-    box = undo_box_preprocessing(box, batch["/meta/image_info"])  # coordinates for the original image
+    box = undo_box_preprocessing(box, batch["/meta/image_info"])  # -> coordinates for the input image
     box = box.tolist()
     box = [box[1], box[0], box[3], box[2]]  # yxyx to xyxy
     return box
@@ -194,8 +232,8 @@ class TaskRunner:
     """
     prompt = self.prompt.random_prompt("VQA_short_prompt")
     prompt = prompt.replace("{}", question)
-    batch = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="text")
-    out = self.predict_text(batch, max_tokens=32)
+    example = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="text")
+    out = self.predict_text(example, max_tokens=32)
     return out
 
   def box_categorization(self, image, box, answer_options, batch_size=50):
@@ -215,9 +253,9 @@ class TaskRunner:
       # assume options are already in tensor form
       tensors = answer_options
     prompt = self.prompt.random_prompt("Box_Classification_Scene")
-    batch = self.uio2_preprocessor(
+    example = self.uio2_preprocessor(
       text_inputs=prompt, image_inputs=image, target_modality="text", box_inputs=box)
-    batch = {k: torch.as_tensor(v, device=self.device)[None, ...] for k, v in batch.items()}
+    batch = self.singleton_batch(example)
     scores = self.model.score_answer_options(batch, tensors, batch_size)
     ix = torch.argmin(scores)
     if isinstance(answer_options, list):
@@ -234,8 +272,8 @@ class TaskRunner:
       thresh: always produce a location token if total probabilty on locations is > `thresh`
               used to prevent premature EOS during beam search due to probability getting
               distributed over many similar location tokens
-      nms: Apply NMS, if `thresh` is set sometimes we can rarely get repeated boxes,
-           but NMS with a high threshold can prune them
+      nms: Apply NMS, if `thresh` is we can occasionally get repeated boxes,
+           we use NMS with a high threshold to prune them
       no_cat: Don't prompt the model to repeat the object categories, makes the response
               more token-efficient, but off by default since we did not eval grit with this on
     Returns: List of [x1, y1, x2, y2] boxes
@@ -271,6 +309,7 @@ class TaskRunner:
     else:
       return np.zeros((0, 4), dtype=np.int32)
 
+
   def keypoint_box(self, image, target_box, free_form=False):
     """Find keypoint for the person in `target_box`
 
@@ -299,13 +338,43 @@ class TaskRunner:
       image: Image to get keypoints for
 
     Returns: points: List of [17, 3] keypoint arrays
-
     """
     boxes = self.localization(image, "person", thresh=0.5)
     all_points = []
     for box in boxes:
       all_points.append(self.keypoint_box(image, box)[0])
     return all_points
+
+  def object_detection(self, image, coco_prompt=True, thresh=0.5, nms=0.8):
+    """Object detection, note UIO2 can struggle on crowded images
+
+    Returns: list of x1 y2 x2 y2 boxes, and list string box labels
+    """
+    if coco_prompt:
+      prompt = self.prompt.random_prompt("Detection_Generic")
+    else:
+      prompt = self.prompt.random_prompt("Detection_COCO")
+    batch = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="text")
+    out = self.predict_text(
+      batch, max_tokens=512, logits_processor=[PredictBoxesPreprocessor(thresh)])
+    boxes, labels = extract_labelled_boxes(out)
+    if len(boxes) > 0:
+      boxes = boxes*config.IMAGE_INPUT_SIZE[0]
+      boxes = undo_box_preprocessing(boxes, batch["/meta/image_info"])
+      if nms is not None and len(boxes) > 1:
+        ixs = tf.image.non_max_suppression(
+          np.array(boxes),
+          max_output_size=len(boxes),
+          scores=np.arange(len(boxes))[::-1],
+          iou_threshold=nms
+        ).numpy()
+        boxes = boxes[ixs]
+        labels = [labels[i] for i in ixs]
+      boxes = np.stack([
+        boxes[:, 1], boxes[:, 0],
+        boxes[:, 3], boxes[:, 2]
+      ], 1)
+    return boxes, labels
 
   def video_captioning(self, video):
     """Caption a video
@@ -335,19 +404,83 @@ class TaskRunner:
     text = self.predict_text(batch, max_tokens=64)
     return text
 
-  def image_generation(self, text):
-    prompt = self.prompt.random_prompt("audio_caption")
-    batch = self.uio2_preprocessor(text_inputs=prompt)
-    out = self.model.predict_image(batch)
-    return out["image"], out
-
   def image_captioning(self, image):
+    """Caption an image
+
+    Args:
+      image: image file path or RGB image array
+
+    Returns: Text caption
+    """
+    # This prompt will get a COCO-like caption, which is generally expected
     prompt = self.prompt.random_prompt("image_caption_coco_2017")
-    batch = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image)
+    batch = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="text")
     return self.predict_text(batch, max_tokens=64)
 
-  def surface_normal(self, image):
-    raise ValueError()
+  def image_generation(self, text, guidance_scale=10, top_p=0.9, num_out=None,
+                       use_prompt=True):
+    """Generate a natural image
+
+    Args:
+      text: Text o match
+      guidance_scale: Guidance scale for classifier free guidance
+      top_p: top during sampling
+      num_out: number of examples to generate
+      use_prompt: Embed `text` in an image generation prompt
+
+    Returns: List of PIL.Image of lengths `num_out` if num_out, else one PIL.Image
+    """
+    if use_prompt:
+      prompt = self.prompt.random_prompt("image_generation_coco_2017")
+      prompt = prompt.replace("{}", text)
+    else:
+      prompt = text
+    example = self.uio2_preprocessor(text_inputs=prompt, target_modality="image")
+    example = self.singleton_batch(example)
+
+    if guidance_scale:
+      negative_prompt = self.uio2_preprocessor(
+        text_inputs=IMAGE_CLF_FREE_PROMPT, target_modality="image")
+      negative_prompt = self.singleton_batch(negative_prompt)
+    else:
+      negative_prompt = None
+
+    if num_out:
+      # A bit wasteful since we end up re-encoding the same inputs multiple times,
+      # but GenerationMixin doesn't seem to support multiple outputs
+      example = {k: v.expand(*([num_out] + [-1]*(len(v.shape)-1))) for k, v in example.items()}
+
+    out = self.model.generate(
+      example,
+      negative_prompt=negative_prompt,
+      guidance_scale=guidance_scale,
+      top_p=top_p,
+      top_k=None,
+      do_sample=True,
+      modality="image"
+    )
+    out = out.cpu().numpy()
+    out = (out*255).astype(np.uint8)
+    if num_out:
+      return [Image.fromarray(x) for x in out]
+    else:
+      return Image.fromarray(out[0])
+
+  def surface_normal_estimation(self, image, top_p=0.97, temperature=0.9):
+    """Returns: a RGB surface normal encoding for `image``"""
+
+    prompt = self.prompt.random_prompt("Surface_Normals_Estimation")
+    example = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="image")
+    out = self.model.generate(
+      self.singleton_batch(example),
+      top_p=top_p,
+      top_k=None,
+      do_sample=True,
+      temperature=temperature,
+      modality="image"
+    )
+    data = out.cpu().numpy()
+    return undo_image_process(data[0], example["/meta/image_info"], to_int=True)
 
   def audio_generation(self, text):
     raise ValueError()

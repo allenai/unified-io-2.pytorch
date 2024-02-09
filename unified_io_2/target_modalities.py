@@ -214,7 +214,6 @@ class ImageViTVQGAN(nn.Module):
   def get_target_sequence(self, input_tokens, shared_embed, mask, target_tokens=None, task_mask=None,
                           loss_mask=None, segment_ids=None, cur_index=None, pos_ids=None):
     cfg = self.config
-    vqgan_cfg = self.vqgan_config
     bs = input_tokens.shape[0]
 
     x = shared_embed(input_tokens)
@@ -262,7 +261,7 @@ class ImageViTVQGAN(nn.Module):
     
     cfg = self.config
     if cur_index is not None:
-      return self.get_target_sequence(image, mask, shared_embed, segment_ids, cur_index=cur_index)
+      return self.get_target_sequence(image, shared_embed, mask, segment_ids, cur_index=cur_index)
     else:
       input_tokens, target_tokens, loss_mask = self.target_image_to_seq(image, loss_mask)
 
@@ -275,7 +274,7 @@ class TargetImageVQGANEmbedder(ModalityEncoder):
     super().__init__()
     self.config = config
   def preprocess_inputs(
-      self, features: Dict, sequence_length) -> Optional[Dict[str, tf.Tensor]]:
+      self, features: Dict, tokenizer, sequence_length) -> Optional[Dict[str, tf.Tensor]]:
     image_target_size = IMAGE_TARGET_SIZE
     image_target_d = IMAGE_TARGET_D
     target_padding_size = tf.constant(

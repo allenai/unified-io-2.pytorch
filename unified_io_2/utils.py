@@ -16,6 +16,8 @@ from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities.load import _lazy_load as lazy_load
 from torch.serialization import normalize_storage_type
 import numpy as np
+import tensorflow as tf
+
 
 def flatten_dict(d, sep="/"):
   _out = dict()
@@ -81,6 +83,16 @@ def token_to_float(token: int):
   return 1.0 - (token - 32000) / (1000 - 1)
 
 
+def pad_and_cat(a, b):
+  diff = a.shape[1] - b.shape[1]
+  other = [0, 0] * (len(a.shape) - 2)
+  if diff > 0:
+    b = F.pad(b, other + [0, diff])
+  else:
+    a = F.pad(a, other + [0, -diff])
+  return torch.cat([a, b])
+
+
 def extra_id_to_float(extra_id: Union[int, np.ndarray]):
   """Converts extra id numbers from location text tokens to floats
 
@@ -118,3 +130,30 @@ def undo_box_preprocessing(boxes, image_info):
   boxes = np.maximum(boxes, 0)
   boxes = np.minimum(boxes, [h, w, h, w])
   return boxes
+
+
+def undo_image_process(image, image_info, gray_scale=False,
+                       resize_method=tf.image.ResizeMethod.NEAREST_NEIGHBOR, to_int=False):
+  if gray_scale:
+    image = tf.reduce_mean(image, -1, keepdims=True)
+
+  off_x = int(image_info[7])
+  off_y = int(image_info[8])
+  if not (off_x == 0 and off_y == 0):
+    raise NotImplementedError()
+
+  src_h = int(image_info[3])
+  src_w = int(image_info[4])
+
+  w = max(src_h, src_w)
+  image = tf.image.resize(image, [w, w], method=resize_method)
+  if src_h > src_w:
+    delta = (src_h - src_w) // 2
+    image = image[:, delta:delta+src_w]
+  else:
+    delta = (src_w - src_h) // 2
+    image = image[delta:delta+src_h, :]
+
+  if to_int:
+    image = tf.image.convert_image_dtype(image, dtype=tf.uint8)
+  return image.numpy()

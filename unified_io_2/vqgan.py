@@ -63,9 +63,9 @@ class AttnBlock(nn.Module):
     b, c, h, w = q.shape
     
     # attend to values
-    w_ = torch.einsum('bcq,bkc->bqk', q.reshape(b, c, h*w), k.reshape(b, c, h*w))
+    w_ = torch.einsum('bcq,bck->bqk', q.reshape(b, c, h*w), k.reshape(b, c, h*w))
     w_ = w_ * (c ** -0.5)
-    w_ = F.softmax(w_, dim=1)
+    w_ = F.softmax(w_, dim=-1)
     h_ = torch.einsum('bqk,bck->bcq', w_, v.reshape(b, c, h*w))
     h_ = h_.reshape(b, c, h, w)
 
@@ -281,7 +281,7 @@ class VQGAN(nn.Module):
     quant_b = self.quantize.get_codebook_entry(code_b, (bs, size, size, self.embed_dim))
     dec = self.decode(quant_b)
     return dec
-  
+
   def get_codebook_indices(self, x, vqgan_decode=False):
     h = self.encoder(x)
     h = self.quant_conv(h)

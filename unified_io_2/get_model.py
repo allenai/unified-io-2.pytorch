@@ -95,6 +95,7 @@ def get_input_modalities(
     if "audio" in input_modality and encoder is not None:
       encoder = ModuleReference(encoder)
     out["audio_history"] = InputAudioHistoryViTEncoder(encoder, audio_history_cfg)
+  assert len(out) > 0
   return out
 
 
@@ -112,6 +113,7 @@ def get_target_modalities(
     out['image'] = TargetImageVQGANEmbedder(image_vqgan_config)
   if 'audio' in target_modality:
     out['audio'] = TargetAudioDVAEEmbedder(audio_vqgan_config)
+  assert len(out) > 0
   return out
 
 

@@ -91,7 +91,6 @@ def _map_name(name):
         parts[-1] = "weight"
         transpose = (3, 2, 0, 1)
 
-
   if parts[-2] == "attention":
     parts[-1] = "weight"
 
@@ -108,7 +107,9 @@ def convert_params(params):
   mapped_params = {}
   for k, v in params.items():
     k, tr = _map_name(k)
-    if tr:
+    if isinstance(tr, tuple):
+      v = np.transpose(v, tr)
+    elif tr:
       v = v.T
     mapped_params[k] = torch.as_tensor(v)
   return mapped_params
@@ -130,7 +131,7 @@ def load_checkpoint(
   prefixes = [
     'decoder', 'encoder',
     'audio_token_embedder', 'image_token_embedder', 'text_token_embedder',
-    'input_text_encoder', 'target_encoders_text',
+    'input_text_encoder',
   ]
   if "image" in input_modalities:
     prefixes.append("input_image_encoder")
@@ -142,6 +143,8 @@ def load_checkpoint(
     prefixes.append('input_encoders_image_history')
   if "image" in target_modalities:
     prefixes.append('target_encoders_image')
+  if "text" in target_modalities:
+    prefixes.append('target_encoders_text')
   if "audio" in target_modalities:
     raise ValueError()
 
