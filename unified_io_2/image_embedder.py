@@ -96,7 +96,7 @@ class ResidualAttentionBlock(nn.Module):
   def __init__(self, config):
     super().__init__()
     self.config = config
-    self.ln_1 = layers.LayerNorm(config.emb_dim, eps=1e-5)
+    self.ln_1 = nn.LayerNorm(config.emb_dim, eps=1e-5)
     self.attn = MultiHeadDotProductAttention(
         config.emb_dim,
         config.num_heads,
@@ -105,7 +105,7 @@ class ResidualAttentionBlock(nn.Module):
         # The uio2 jax code did not use this parameter.
         # float32_logits=config.float32_attention_logits
     )
-    self.ln_2 = layers.LayerNorm(config.emb_dim, eps=1e-5)
+    self.ln_2 = nn.LayerNorm(config.emb_dim, eps=1e-5)
     self.mlp = MLP(config)
   
   def forward(self, x, attn_mask):
@@ -151,7 +151,7 @@ class VisionTransformer(nn.Module):
     scale = config.emb_dim
     self.class_embedding = nn.Parameter(scale * torch.randn(config.emb_dim))
     self.positional_embedding = nn.Parameter(scale * torch.randn(config.num_pos, config.emb_dim))
-    self.pre_ln = layers.LayerNorm(config.emb_dim, eps=1e-5)
+    self.pre_ln = nn.LayerNorm(config.emb_dim, eps=1e-5)
     self.transformer = Transformer(config)
 
   def add_pos_emb(self, x, pos_ids, patch_num):
