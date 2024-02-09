@@ -543,6 +543,13 @@ class UnifiedIO(nn.Module, GenerationMixin):
       images = torch.permute(images, [0, 2, 3, 1])
       # TODO handle return output dictionary
       return images
+
+    if modality == "audio":
+      tokens = tokens[:, 1:]  # remove BOS
+      if tokens.shape[1] != 512:
+        raise ValueError("Did not generate a full spectogram")
+      raise NotImplementedError()
+
     return tokens
 
   def encode_batch(self, input_features):

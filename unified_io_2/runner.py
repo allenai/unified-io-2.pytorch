@@ -13,7 +13,7 @@ from unified_io_2 import config
 from unified_io_2.modality_processing import UnifiedIOPreprocessing
 from unified_io_2.prompt import Prompt
 from unified_io_2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
-  extra_id_to_float, extract_locations_from_token_ids, undo_image_process
+  extra_id_to_float, extract_locations_from_token_ids, undo_image_preprocessing
 
 HUMAN_POSE_PART = [
   "nose", "left eye", "right eye", "left ear", "right ear", "left shoulder",
@@ -161,12 +161,11 @@ IMAGE_CLF_FREE_PROMPT = "An image of a random picture."
 
 
 class TaskRunner:
-  """
-  Wraps a UIO2 model and UIO2 preprocessor and does a set of tasks.
+  """Wraps a UIO2 model and UIO2 preprocessor and does a set of tasks.
 
   This is intended mostly to demonstrate how to use the model for these different tasks,
-  to run these tasks efficiently we recommend batching the input and
-  running the pre-processing inside a DataLoader
+  to run these tasks efficiently we recommend batching the input and running the pre-processing
+  inside a DataLoader.
   """
 
   def __init__(self, model, uio2_preprocessor: UnifiedIOPreprocessing, prompts=None):
@@ -247,7 +246,8 @@ class TaskRunner:
     Returns: the most probable class
     """
     if isinstance(answer_options, list):
-      tensors = pad_and_stack([self.tokenizer.encode(x) for x in answer_options], add_eos=True)
+      tensors = pad_and_stack(
+        [self.tokenizer.encode(x) + [1] for x in answer_options], add_eos=True)
       tensors = tensors.to(self.device)
     else:
       # assume options are already in tensor form
@@ -262,6 +262,20 @@ class TaskRunner:
       return answer_options[ix]
     else:
       return self.tokenizer.decode(tensors[ix])
+gd unified_io_2/runner.py
+  def categorization(self, image, answer_options, batch_size=50):
+    """Categorize the image, return a class in `answer_options`"""
+    # imagenet prompt is generic, but using a prompt that give a better hint about what kind
+    # of classes to consider can help
+    prompt = self.prompt.random_prompt("image_tagging_imagenet2012")
+    batch = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="text")
+    batch = self.singleton_batch(batch)
+    tensors = pad_and_stack(
+      [self.tokenizer.encode(x) + [1] for x in answer_options], add_eos=True)
+    tensors = tensors.to(self.device)
+    scores = self.model.score_answer_options(batch, tensors, batch_size)
+    ix = torch.argmin(scores)
+    return answer_options[ix]
 
   def localization(self, image, cls, thresh=0.3, nms=0.8, no_cat=False):
     """Find all locations where `cls` occurs in `image`
@@ -309,7 +323,6 @@ class TaskRunner:
     else:
       return np.zeros((0, 4), dtype=np.int32)
 
-
   def keypoint_box(self, image, target_box, free_form=False):
     """Find keypoint for the person in `target_box`
 
@@ -346,9 +359,9 @@ class TaskRunner:
     return all_points
 
   def object_detection(self, image, coco_prompt=True, thresh=0.5, nms=0.8):
-    """Object detection, note UIO2 can struggle on crowded images
+    """Returns a list of x1 y2 x2 y2 boxes, and list string box labels
 
-    Returns: list of x1 y2 x2 y2 boxes, and list string box labels
+    note this task can be pretty unreliable for UIO2, particularly for crowded images
     """
     if coco_prompt:
       prompt = self.prompt.random_prompt("Detection_Generic")
@@ -466,9 +479,8 @@ class TaskRunner:
     else:
       return Image.fromarray(out[0])
 
-  def surface_normal_estimation(self, image, top_p=0.97, temperature=0.9):
+  def surface_normal_estimation(self, image, top_p=0.9, temperature=0.9, original_size=True):
     """Returns: a RGB surface normal encoding for `image``"""
-
     prompt = self.prompt.random_prompt("Surface_Normals_Estimation")
     example = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="image")
     out = self.model.generate(
@@ -479,16 +491,67 @@ class TaskRunner:
       temperature=temperature,
       modality="image"
     )
+    data = out.cpu().numpy()[0]
+    if original_size:
+      return undo_image_preprocessing(data, example["/meta/image_info"], to_int=True)
+    else:
+      return (data*255).astype(np.uint8)
+
+  def depth_estimation(self, image, top_p=0.9, temperature=0.9, original_size=True):
+    """Returns: a gray-scale depth map `image``
+
+    white=0meters, black=10meters, note UIO2 seems to be under-trained on this tasks so
+    results are often not great
+    """
+    prompt = self.prompt.random_prompt("Depth_Estimation")
+    example = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="image")
+    out = self.model.generate(
+      self.singleton_batch(example),
+      top_p=top_p,
+      top_k=None,
+      do_sample=True,
+      temperature=temperature,
+      modality="image"
+    )
+    data = out.cpu().numpy()[0]
+    if original_size:
+      return undo_image_preprocessing(data, example["/meta/image_info"], gray_scale=True)
+    else:
+      return data.mean(-1)
+
+  def segmentation_box(self, image, target_class, target_box, top_p=0.95,
+                       temperature=0.9, original_size=True):
+    """Returns a binary mask over the instances of `target_class` in `target_box`"""
+    prompt = self.prompt.random_prompt("Object_Segmentation")
+    prompt = prompt.replace("{}", "{box} " + target_class)
+    example = self.uio2_preprocessor(
+      text_inputs=prompt, image_inputs=image, box_inputs=target_box, target_modality="image")
+    out = self.model.generate(
+      self.singleton_batch(example),
+      top_p=top_p,
+      top_k=None,
+      do_sample=True,
+      temperature=temperature,
+      modality="image"
+    )
     data = out.cpu().numpy()
-    return undo_image_process(data[0], example["/meta/image_info"], to_int=True)
+    if original_size:
+      image = undo_image_preprocessing(data[0], example["/meta/image_info"], gray_scale=True)
+      image = np.squeeze(image, -1)
+    else:
+      image = image.mean(-1)
+    return image > 0.5
+
+  def segmentation_class(self, image, target_class):
+    """Return binary masks for each instance of `target_class` in `image`"""
+    masks = []
+    for box in self.localization(image, target_class):
+      mask = self.segmentation_box(image, target_class, box)
+      if np.any(mask):
+        masks.append(mask)
+    return masks
 
   def audio_generation(self, text):
     raise ValueError()
-
-  def segmentation_box_class(self, image, target_class, target_box):
-    raise NotImplementedError()
-
-  def segmentation(self, image, target_class):
-    raise NotImplementedError()
 
   # TODO also an audio and video text (QA or captioning)

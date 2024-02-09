@@ -351,6 +351,112 @@ PROMPT_DICT["Detection_COCO"] = dict(
 )
 
 
+PROMPT_DICT['Object_Segmentation'] = dict(
+  original=[
+    'Segment the object in this bounding box: {}',
+  ],
+  manual=[
+    'Building a binary mask of the pixels that part of the main object in {}',
+    'Generate a black and white image. The white pixels should be ones that are part of the object in {}',
+    'Segment the object at {}',
+    'There is an object at {}. Building a binary mask containing just the pixels of that object',
+    "Object segmentation requires building a binary mask with white pixels that are part of a particular object and black pixels"
+    " everywhere else. Do object segmentation for the object at {}",
+    "Show me what pixels are part of the object at {}",
+    "What are the exact pixels that belong to the main object in the bounding box {}?"
+  ],
+  gpt3=[
+    'Select the pixels that match the description " {} ".',
+    'Highlight the pixels that fit the description " {} ".',
+    'To do object segmentation, you must find the pixels that represent each instance of a category. Find the object segmentation of " {} ".',
+    'Identify the pixels that correspond to each instance of the category " {} ".',
+    'Mark all the pixels that depict " {} ".',
+  ]
+)
+
+
+PROMPT_DICT['Depth_Estimation'] = dict(
+  original=[
+    'What is the depth map of the image ?',
+  ],
+  manual=[
+    'Assign each pixel in this image a depth value, and generate a grayscale image representing the depth at each pixel.',
+    'Determine the depth of each pixel of this image, and generate a map of the same.',
+    'Generate a depth map of this image, where darker pixels correspond to less depth.',
+    'Depth image: ',
+    'Generate the depth image.',
+    "What is the depth?",
+  ],
+  gpt3=[
+    "Allocate a depth value to every pixel in the picture and create a grayscale image representing the depth at every pixel.",
+    "Ascertain the depth of each pixel in this image and create a corresponding map.",
+    "Produce a depth map of the picture where darker pixels signify less depth.",
+    "Image demonstrating depth: ",
+    "Create an image showing depth.",
+    "Could you determine the depth?",
+    "Assign a depth value for each pixel in this image and represent it through a grayscale image.",
+    "Map the depth of each pixel in this image and generate a corresponding visual.",
+    "Form a depth map where the image's darker pixels indicate shallower depth.",
+    "Depth portrayal in the image: ",
+    "Develop an image that shows the depth.",
+    "What's the depth measurement?",
+    "Give each pixel a depth value in this image, and form a grayscale image showing the depth of each pixel.",
+    "Identify the depth for every pixel in this image and construct a matching map.",
+    "Create a depth map for this image, with darker pixels indicating less depth.",
+    "Depiction of depth in the image: ",
+    "Generate an image that indicates the depth.",
+    "Can you provide the depth?",
+    "Set a depth value for all pixels in this image and construct a grayscale image to reflect this depth.",
+    "Gauge the depth of each pixel in this image and produce a map to show it.",
+  ]
+)
+
+PROMPT_DICT['image_tagging_imagenet2012'] = {
+  "original": ["What is this? Return a precise but very short answer."],
+  "manual": [
+    'What is the most prominent object in this image? Please provide a short answer.',
+    'Name the most prominent object in this image with a short answer.',
+    'Give me the name of the object in the image',
+    'Give me a fine-grained tag for the thing in the photo',
+    'Generate a fine-grained tag for the thing in <image_input>',
+
+    'Please provide a short answer. What does <image_input> contain?',
+    "What is this? Give me a precise but very short, few-word answer.",
+    "What is the main object in the photo? Return a short but fine-grained category.",
+    "Return a fine-grained class that matches the object in the image.",
+    "State, precisely and succinctly, what is shown here",
+    "Tell me a fine-grained category that matches the object in the image.",
+
+    'Can you identify the object in <image_input>? Give a brief response.',
+    'Identify the object in the image. Brief response:',
+    'Can you describe briefly what\'s in the image?',
+    'What does the image show? Kindly give a concise answer.',
+    'In a few words, can you tell what object is depicted in the image?',
+    'Could you briefly explain what object is presented in the image?',
+
+    'Identify the main object in this image in a few words',
+    'Provide a brief description of the most noticeable object in this image.',
+    'What\'s the single object highlighted in this image?',
+    'Briefly, what is the primary content of this image?',
+    'What object stands out the most in this image? Please give a succinct response.',
+    'Name the object that is the most striking in this image briefly.',
+
+    'What is the principal item featured in this image? Keep the answer short.',
+    'Offer a concise response: What\'s the main focus of this image?',
+    'Please provide a quick answer. What\'s the chief subject of the image?',
+    'Can you identify the central subject in this image? A short answer will do.',
+    'What\'s the foremost entity captured in this picture? Keep your response brief.',
+    'Give a succinct description of the primary thing in this picture.',
+    'In this image, what\'s the dominant figure or object? Please provide a short answer.',
+    'What\'s the major object in this image? Kindly provide a succinct reply.',
+    'Quickly name the primary object featured in this picture.',
+    'Categorize the key entity depicted in the image in a few words.',
+    'Which object stands out the most? Give a short answer.',
+    'In just a few words, what\'s the notable object in this image?',
+  ]
+}
+
+
 class Prompt:
   def __init__(self, original_flag=True, manual_flag=True,
                gpt3_flag=True, single_prompt=False):

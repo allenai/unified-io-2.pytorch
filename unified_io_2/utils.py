@@ -132,8 +132,9 @@ def undo_box_preprocessing(boxes, image_info):
   return boxes
 
 
-def undo_image_process(image, image_info, gray_scale=False,
-                       resize_method=tf.image.ResizeMethod.NEAREST_NEIGHBOR, to_int=False):
+def undo_image_preprocessing(image, image_info, gray_scale=False,
+                             resize_method=tf.image.ResizeMethod.NEAREST_NEIGHBOR, to_int=False):
+  """Resizes/crops an image to match the size/scale before pre-processing"""
   if gray_scale:
     image = tf.reduce_mean(image, -1, keepdims=True)
 
