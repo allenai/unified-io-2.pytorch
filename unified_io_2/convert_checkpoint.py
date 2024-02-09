@@ -4,11 +4,10 @@ import numpy as np
 import torch
 
 
-def _map_name(name):
-  transpose = False
+def convert_param(name, param):
   parts = name.split(".")
   if len(parts) == 0:
-    return name
+    return name, param
 
   if parts[0] in {"input_encoders_audio_history", "input_encoders_image_history"}:
     # resampler translation
@@ -30,7 +29,7 @@ def _map_name(name):
       parts[0] = "input_embedders.image"
 
     if ".class_embedding." in name:
-      transpose = True
+      return name, param.T
 
     if len(parts) > 3 and parts[3] == "Transformer_0":
       parts[3] = "transformer"
@@ -45,7 +44,7 @@ def _map_name(name):
           parts = parts[:-2] + [f"{parts[-2]}_in_proj_bias"]
         elif parts[-1] == "kernel":
           parts = parts[:-2] + [f"{parts[-2]}_in_proj_weight"]
-          transpose = True
+          param = param.T
       elif parts[5] == "MLP_0":
         parts[5] = "mlp"
         if parts[6] == "c_fc":
@@ -54,7 +53,7 @@ def _map_name(name):
           parts[6] = "fc2"
     if parts[-1] == "kernel":
       parts[-1] = "weight"
-      transpose = True
+      param = param.T
     if parts[-2] == "norm1":
       parts[-2] = "ln_1"
     elif parts[-2] == "norm2":
@@ -63,9 +62,6 @@ def _map_name(name):
       parts[-1] = "weight"
     if parts[-1] == "pos_embed":
       parts[-1] = "positional_embedding"
-    # if parts[-2] in {"pre_ln", "ln_1", "ln_2"} and parts[-1] == "scale":
-    #   parts[-1] = "weight"
-    return ".".join(parts), transpose
 
   if parts[0] == "input_text_encoder":
     parts[0] = "input_embedders.text"
@@ -76,7 +72,7 @@ def _map_name(name):
 
   if parts[0] == "target_encoders_text":
     parts[0] = "target_embedders.text"
-  
+
   if parts[0] == "target_encoders_image":
     # image target encoder translation
     parts[0] = "target_embedders.image"
@@ -89,7 +85,7 @@ def _map_name(name):
           parts[-1] = "weight"
       elif parts[-1] == "kernel":
         parts[-1] = "weight"
-        transpose = (3, 2, 0, 1)
+        return ".".join(parts), np.permsute(param, (3, 2, 0, 1))
 
   if parts[0] == "target_encoders_audio":
     # audio target encoder translation
@@ -112,14 +108,13 @@ def _map_name(name):
             parts[5] = f"ln_{num}"
       elif parts[3] == "ConvTranspose_0":
         parts[3] = "conv_transpose"
-        transpose = (2, 3, 0, 1)
-      
+        parts[-1] = "weight"
+        v = np.transpose(param, (2, 3, 0, 1))
+        v = np.flip(v, [2, 3])
+        return ".".join(parts), v.copy()
+
       if parts[-1] == "scale":
         parts[-1] = "weight"
-      if parts[-1] == "kernel":
-        parts[-1] = "weight"
-        if parts[3] != "conv_transpose":
-          transpose = True
 
   if parts[-2] == "attention":
     parts[-1] = "weight"
@@ -129,18 +124,14 @@ def _map_name(name):
 
   if parts[-1] == "kernel":
     parts[-1] = "weight"
-    transpose = True
-  return ".".join(parts), transpose
+    param = param.T
+  return ".".join(parts), param
 
 
 def convert_params(params):
   mapped_params = {}
   for k, v in params.items():
-    k, tr = _map_name(k)
-    if isinstance(tr, tuple):
-      v = np.transpose(v, tr)
-    elif tr:
-      v = v.T
+    k, v = convert_param(k, v)
     mapped_params[k] = torch.as_tensor(v)
   return mapped_params
 
@@ -186,3 +177,5 @@ def load_checkpoint(
   else:
     raise NotImplementedError()
   return mapped_params
+
+

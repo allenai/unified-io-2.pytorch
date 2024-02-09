@@ -43,7 +43,7 @@ class MlpBlock(nn.Module):
     x = layers._convert_to_activation_function(self.act_fn)(x)
     x = self.dropout(x)
     output = self.fc2(x)
-    output = self.dropout(x)
+    output = self.dropout(output)
     return output
 
 
@@ -233,7 +233,7 @@ class ViTDecoder(nn.Module):
     cfg = self.config
     bs = x.shape[0]
     x = self.decoder_proj(x)
-    x += self.encoder_position_embedding.unsqueeze(0)
+    x += self.decoder_position_embedding.unsqueeze(0)
     x = self.transformer(x)
     img_size = cfg.default_input_size
     patch_size = cfg.patch_size

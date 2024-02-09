@@ -262,7 +262,7 @@ class TaskRunner:
       return answer_options[ix]
     else:
       return self.tokenizer.decode(tensors[ix])
-gd unified_io_2/runner.py
+
   def categorization(self, image, answer_options, batch_size=50):
     """Categorize the image, return a class in `answer_options`"""
     # imagenet prompt is generic, but using a prompt that give a better hint about what kind

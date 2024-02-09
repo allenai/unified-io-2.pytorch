@@ -548,7 +548,12 @@ class UnifiedIO(nn.Module, GenerationMixin):
       tokens = tokens[:, 1:]  # remove BOS
       if tokens.shape[1] != 512:
         raise ValueError("Did not generate a full spectogram")
-      raise NotImplementedError()
+      tokens = tokens - 2
+      tokens = torch.clip(tokens, 0)
+      tokens = torch.reshape(tokens, [-1, 32, 16])
+      tokens = tokens.transpose(2, 1).reshape(tokens.shape[0], -1)
+      spectogram = self.target_embedders["audio"].vqgan.decode_code(tokens)
+      return spectogram
 
     return tokens
 
