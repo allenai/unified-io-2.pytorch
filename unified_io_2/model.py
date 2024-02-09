@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from transformers import GenerationMixin, Cache, LlamaModel, DynamicCache, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.utils import ModelOutput
 
 from unified_io_2.config import Config, T5Config
 from unified_io_2 import seq_features, layers
@@ -476,6 +477,9 @@ class UnifiedIO(nn.Module, GenerationMixin):
       guidance_scale=10,
       **kwargs,
   ):
+    if modality not in self.target_encoders:
+      raise ValueError(f"No target encoder for {modality}")
+
     if modality != "text":
       if kwargs.get("max_new_tokens") is not None or kwargs.get("min_new_tokens") is not None:
         raise ValueError("non-text modalities cannot set generation length")
@@ -516,7 +520,7 @@ class UnifiedIO(nn.Module, GenerationMixin):
       return self.target_embedders[modality](
           input_id, mask=mask, cur_index=cur_index, shared_embed=self.shared_embedding[modality])
 
-    tokens = self.decoder.generate(
+    out = self.decoder.generate(
       **kwargs,
       modality=modality,
       input_ids=input_ids,
@@ -526,6 +530,13 @@ class UnifiedIO(nn.Module, GenerationMixin):
       encoded=encoder_hidden,
       encoder_mask=mask,
     )
+
+    if isinstance(out, ModelOutput):
+      tokens = out[0]
+      output_dict = out
+    else:
+      tokens = out
+      output_dict = None
 
     if negative_prompt:
       tokens = tokens[:tokens.shape[0]//2]
@@ -542,20 +553,30 @@ class UnifiedIO(nn.Module, GenerationMixin):
       images = torch.clip((images+1)/2, 0, 1)
       images = torch.permute(images, [0, 2, 3, 1])
       # TODO handle return output dictionary
-      return images
+      if output_dict is None:
+        return images
+      else:
+        output_dict["image"] = images
 
-    if modality == "audio":
+    elif modality == "audio":
       tokens = tokens[:, 1:]  # remove BOS
       if tokens.shape[1] != 512:
         raise ValueError("Did not generate a full spectogram")
       tokens = tokens - 2
-      tokens = torch.clip(tokens, 0)
+      tokens = torch.clip(tokens, 0, self.target_embedders["audio"].vqgan.config.vocab_size-1)
       tokens = torch.reshape(tokens, [-1, 32, 16])
       tokens = tokens.transpose(2, 1).reshape(tokens.shape[0], -1)
       spectogram = self.target_embedders["audio"].vqgan.decode_code(tokens)
-      return spectogram
+      spectogram = torch.unsqueeze(torch.squeeze(spectogram, 1), -1)
+      if output_dict is None:
+        return spectogram  # [batch_size, 128, 256, 1]
+      else:
+        output_dict["spectogram"] = spectogram
 
-    return tokens
+    if output_dict is not None:
+      return out
+    else:
+      return tokens
 
   def encode_batch(self, input_features):
     input_parts: List[InputSequence] = []

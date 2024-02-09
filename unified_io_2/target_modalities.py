@@ -477,7 +477,7 @@ class TargetAudioVQGANEmbedder(ModalityEncoder):
     return AudioVQGAN(config, self.config)
 
   def preprocess_inputs(
-      self, features: Dict, sequence_length) -> Optional[Dict[str, tf.Tensor]]:
+      self, features: Dict, tokenizer, sequence_length) -> Optional[Dict[str, tf.Tensor]]:
 
     target_size = AUDIO_TARGET_SIZE
     target_d = AUDIO_TARGET_D

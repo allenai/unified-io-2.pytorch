@@ -457,6 +457,43 @@ PROMPT_DICT['image_tagging_imagenet2012'] = {
 }
 
 
+PROMPT_DICT['Audio_Generation'] = dict(
+  original=[
+    'Synthesize the sound based on the description "{}"',
+  ],
+  manual = [
+    '{}',
+    'Generate the sound based on the description: {}',
+    'What might \"{}\" sound like?',
+    'What is the sound of {}',
+    'Create the noise of: {}',
+    "Event: {} Generate a noise this event could plausibly make."
+  ],
+  gpt3 = [
+    "Generate the sound in accordance with the description '{}'.",
+    "Create audio as described in '{}'.",
+    "Develop a sound that fits the description '{}'.",
+    "Produce the sound that matches the description '{}'.",
+    "Formulate sound based on the given description '{}'.",
+    "Construct a sound representation according to '{}'.",
+    "Design a sound as characterized by '{}'.",
+    "Generate audio corresponding to the details in '{}'.",
+    "Create a sound consistent with the description '{}'.",
+    "Develop audio according to the provided description '{}'.",
+    "Fabricate a sound as per the given details '{}'.",
+    "Create sound that fits the guidelines '{}'.",
+    "Formulate a sound following the instructions '{}'.",
+    "Craft audio as specified in '{}'.",
+    "Devise a sound based on the information '{}'.",
+    "Engineer a sound output matching '{}'.",
+    "Produce audio that aligns with '{}'.",
+    "Render a sound that is consistent with '{}'.",
+    "Model a sound that corresponds with the description '{}'.",
+    "Generate a sound that adheres to the description '{}'.",
+  ]
+)
+
+
 class Prompt:
   def __init__(self, original_flag=True, manual_flag=True,
                gpt3_flag=True, single_prompt=False):

@@ -1,4 +1,7 @@
+import json
+import logging
 import re
+from os.path import join, dirname
 
 import numpy
 import numpy as np
@@ -10,6 +13,7 @@ from PIL import Image
 from transformers import LogitsProcessor
 
 from unified_io_2 import config
+from unified_io_2.audio_hifigan.models import Generator as HifiganGenerator
 from unified_io_2.modality_processing import UnifiedIOPreprocessing
 from unified_io_2.prompt import Prompt
 from unified_io_2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
@@ -158,6 +162,58 @@ class PredictBoxesPreprocessor(LogitsProcessor):
 
 
 IMAGE_CLF_FREE_PROMPT = "An image of a random picture."
+AUDIO_CLF_FREE_PROMPT = "A video of a random audio."
+
+
+class SpectogramConverter:
+  """Convert UIO2 audio spectograms into waveforms that can be played"""
+  def __init__(self, use_hifigan=True):
+    self.use_hi_fi_gan = use_hifigan
+    self.hifigan = None
+
+  def __call__(self, spectogram):
+    if self.use_hi_fi_gan:
+      if self.hifigan is None:
+        src = join(dirname(__file__), "audio_hifigan")
+        logging.info("Loading hi-fi-gan")
+        config_file = f"{src}/checkpoints/config.json"
+        checkpoint = f"{src}/checkpoints/g_00930000"
+        with open(config_file) as f:
+          json_config = json.load(f)
+        torch_device = torch.device("cpu")
+
+        class ObjConfig:  # `Generator` needs attribute lookup, so buitl a dum
+          def __getattr__(self, item):
+            return json_config[item]
+
+        checkpoint_dict = torch.load(checkpoint, map_location=torch_device)
+        hifigan_generator = HifiganGenerator(ObjConfig()).to(torch_device)
+        hifigan_generator.load_state_dict(checkpoint_dict["generator"])
+        hifigan_generator.eval()
+        hifigan_generator.remove_weight_norm()
+        self.hifigan = hifigan_generator
+
+      spectrogram = np.array(spectogram * 3.8312 - 5.0945)[:, :, 0]
+      spectrogram = torch.as_tensor(spectrogram, dtype=torch.float32, device=torch.device("cpu"))
+
+      with torch.no_grad():
+        y_g_hat = self.hifigan(spectrogram)
+      return y_g_hat.squeeze().cpu().numpy()
+    else:
+      import librosa
+      spectrogram = np.exp(spectogram * 3.8312 - 5.0945)[:, :, 0]
+      return librosa.feature.inverse.mel_to_audio(  # type: ignore
+        spectrogram,
+        sr=16000,
+        n_fft=1024,
+        hop_length=256,
+        win_length=None,
+        window="hann",
+        center=True,
+        pad_mode="reflect",
+        power=2.0,
+        n_iter=32,
+      )
 
 
 class TaskRunner:
@@ -168,12 +224,14 @@ class TaskRunner:
   inside a DataLoader.
   """
 
-  def __init__(self, model, uio2_preprocessor: UnifiedIOPreprocessing, prompts=None):
+  def __init__(self, model, uio2_preprocessor: UnifiedIOPreprocessing, prompts=None,
+               use_hifigan_for_audio=True):
     self.model = model
     self.uio2_preprocessor = uio2_preprocessor
     if prompts is None:
       prompts = Prompt()
     self.prompt = prompts
+    self.spectogram_converter = SpectogramConverter(use_hifigan_for_audio)
 
   @property
   def tokenizer(self):
@@ -551,7 +609,36 @@ class TaskRunner:
         masks.append(mask)
     return masks
 
-  def audio_generation(self, text):
-    raise ValueError()
+  def audio_generation(self, text, use_prompt=True, guidance_scale=0, num_out=None, top_p=0.9):
+    if use_prompt:
+      prompt = self.prompt.random_prompt("Audio_Generation")
+      prompt = prompt.replace("{}", text)
+    else:
+      prompt = text
+    example = self.uio2_preprocessor(text_inputs=prompt, target_modality="audio")
+    example = self.singleton_batch(example)
 
-  # TODO also an audio and video text (QA or captioning)
+    if guidance_scale:
+      negative_prompt = self.uio2_preprocessor(
+        text_inputs=AUDIO_CLF_FREE_PROMPT, target_modality="audio")
+      negative_prompt = self.singleton_batch(negative_prompt)
+    else:
+      negative_prompt = None
+
+    if num_out:
+      example = {k: v.expand(*([num_out] + [-1]*(len(v.shape)-1))) for k, v in example.items()}
+
+    out = self.model.generate(
+      example,
+      negative_prompt=negative_prompt,
+      guidance_scale=guidance_scale,
+      top_p=top_p,
+      top_k=None,
+      do_sample=True,
+      modality="audio"
+    )
+    out = out.cpu().numpy()
+    if num_out:
+      return [self.spectogram_converter(x) for x in out]
+    else:
+      return self.spectogram_converter(out[0])

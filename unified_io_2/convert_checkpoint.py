@@ -85,7 +85,7 @@ def convert_param(name, param):
           parts[-1] = "weight"
       elif parts[-1] == "kernel":
         parts[-1] = "weight"
-        return ".".join(parts), np.permsute(param, (3, 2, 0, 1))
+        return ".".join(parts), np.transpose(param, (3, 2, 0, 1))
 
   if parts[0] == "target_encoders_audio":
     # audio target encoder translation
