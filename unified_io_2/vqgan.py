@@ -262,6 +262,17 @@ class VQGAN(nn.Module):
     self.quantize = layers.VectorQuantizer(cfg.n_embed, cfg.embed_dim, beta=0.25)
     self.post_quant_conv = nn.Conv2d(cfg.embed_dim, cfg.z_channels, kernel_size=1, stride=1, padding=0)
     self.decoder = Decoder(cfg)
+
+    # initialize nn.Conv2d
+    self.apply(self._init_weights)
+  
+  def _init_weights(self, m):
+    if isinstance(m, nn.Conv2d):
+      # lecun normal initialization
+      fan_in, _ = nn.init._calculate_fan_in_and_fan_out(m.weight)
+      nn.init.trunc_normal_(m.weight, std=math.sqrt(1 / fan_in), a=-2.0, b=2.0)
+      if m.bias is not None:
+        nn.init.zeros_(m.bias)
   
   def encode(self, x):
     h = self.encoder(x)

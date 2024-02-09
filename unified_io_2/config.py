@@ -277,8 +277,6 @@ class ImageViTVQGANConfig:
   attention_dropout_rate: float = 0.0
   use_bias: bool = False
   act_fn: str = 'relu'
-  # PE
-  add_position_embedding: bool = False
   # Misc.
   dtype: Any = 'float32'
   default_input_size: Sequence[int] = (256,256)
@@ -313,8 +311,6 @@ class AudioViTVQGANConfig:
   attention_dropout_rate: float = 0.0
   use_bias: bool = False
   act_fn: str = 'relu'
-  # PE
-  add_position_embedding: bool = False
   # Misc.
   dtype: Any = 'float32'
   default_input_size: Sequence[int] = (128, 256) # we need to keep this to make it

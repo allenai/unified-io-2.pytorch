@@ -6,10 +6,29 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union, List
 import einops
 
 from transformers import DynamicCache
+
+
+def space_to_depth(
+    frames: torch.Tensor,
+    temporal_block_size: int = 1,
+    spatial_block_size: int = 1) -> torch.Tensor:
+  """Space to depth transform."""
+  if len(frames.shape) == 4:
+    return einops.rearrange(
+        frames, 'b (h dh) (w dw) c -> b (h w) (dh dw c)',
+        dh=spatial_block_size, dw=spatial_block_size)
+  elif len(frames.shape) == 5:
+    return einops.rearrange(
+        frames, 'b (t dt) (h dh) (w dw) c -> b t (h w) (dt dh dw c)',
+        dt=temporal_block_size, dh=spatial_block_size, dw=spatial_block_size)
+  else:
+    raise ValueError(
+        'Frames should be of rank 4 (batch, height, width, channels)'
+        ' or rank 5 (batch, time, height, width, channels)')
 
 
 def get_1d_position_embedding(pos_emb_type, length, emb_dim, head_dim, is_token, modality_idx, prefix=''):
@@ -88,6 +107,7 @@ def get_rotary_coordinates_2d(h, w, llama=False, resolution=1):
     
   return torch.stack(torch.meshgrid(h_coords, w_coords, indexing='ij'), -1).reshape((h * w, 2))
 
+
 def get_rotary_coordinates(seq_len, center_origin=True, llama=False):
   """
   Get rotary coordinates for a single dimension
@@ -136,6 +156,54 @@ def apply_rotary(x, rope_cache):
   return x_out2.to(x.dtype)
 
 
+def get_2d_sincos_pos_embed(emb_dim, image_size, image_patch_size, class_token=False, temperature=10000.):
+  """2D Sinusoidal Position Embedding.
+
+  Args:
+    emb_dim: int, dimension of the embedding.
+    image_size: tuple, image size (height, width).
+    image_patch_size: tuple, image patch size (height, width).
+    class_token: bool, whether to include class token.
+
+  Returns:
+    position embedding of shape (H*W (+ 1), emb_dim).
+  """
+  h, w = image_size[0] // image_patch_size[0], image_size[1] // image_patch_size[1]
+  grid_w = torch.arange(w, dtype=torch.float32)
+  grid_h = torch.arange(h, dtype=torch.float32)
+  grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing='xy')
+
+  assert emb_dim % 4 == 0, 'Embed dimension must be divisible by 4 for 2D sin-cos position embedding'
+  emb_w = get_1d_sincos_pos_embed_from_grid(emb_dim // 2, grid_w, temperature)
+  emb_h = get_1d_sincos_pos_embed_from_grid(emb_dim // 2, grid_h, temperature)
+  pos_emb = torch.cat([emb_w, emb_h], axis=1) # (H*W, D)
+  if class_token:
+    pos_emb = torch.cat([torch.zeros(1, emb_dim, dtype=pos_emb.dtype), pos_emb], axis=0)
+  return pos_emb
+
+
+def get_1d_sincos_pos_embed_from_grid(emb_dim, pos, temperature=10000.):
+  """
+  (Absolute, additive) 1D sinusoidal positional embeddings used in MoCo v3, MAE
+  Args:
+    emb_dim (int): output dimension for each position
+    pos: a list of positions to be encoded: size (H, W), M = H * W
+    out: (M, D)
+  """
+  assert emb_dim % 2 == 0
+  omega = torch.arange(emb_dim // 2, dtype=torch.float32)
+  omega /= emb_dim / 2.
+  omega = 1. / temperature**omega  # (D/2,)
+
+  out = torch.einsum('m,d->md', pos.flatten(), omega) # (M, D/2), outer product
+
+  emb_sin = torch.sin(out) # (M, D/2)
+  emb_cos = torch.cos(out) # (M, D/2)
+
+  emb = torch.cat([emb_sin, emb_cos], axis=1)  # (M, D)
+  return emb
+
+
 class LayerNormFp32(nn.LayerNorm):
   """Subclass torch's LayerNorm to handle fp16 (by casting to float32 and back).
   Derived from https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/transformer.py.
@@ -147,15 +215,28 @@ class LayerNormFp32(nn.LayerNorm):
     return x.to(orig_type)
 
 
+_shape_t = Union[int, List[int], torch.Size]
+
 class LayerNorm(nn.LayerNorm):
   """Subclass torch's LayerNorm (with cast back to input dtype).
   Derived from https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/transformer.py.
   """
+  def __init__(self, normalized_shape: _shape_t, eps: float = 1e-5, weight: bool = True,
+               bias: bool = True, device=None, dtype=None) -> None:
+    super().__init__(normalized_shape, eps, bias=bias, device=device, dtype=dtype)
+    self.use_weight = weight
+    self.use_bias = bias
+    if not weight:
+      self.register_parameter('weight', None)
 
   def forward(self, x: torch.Tensor):
     orig_type = x.dtype
     x = F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
     return x.to(orig_type)
+
+  def extra_repr(self) -> str:
+    return '{normalized_shape}, eps={eps}, ' \
+      'use_weight={use_weight}, use_bias={use_bias}'.format(**self.__dict__)
 
 
 class Dropout(nn.Dropout):
@@ -638,11 +719,9 @@ class MlpBlock(nn.Module):
     emb_dim; input/output dimension of MLP
     intermediate_dim: Shared dimension of hidden layers.
     activations: Type of activations for each layer.  Each element is either
-      'linear', a string function name in flax.linen, or a function.
-    output_dim: output dimension of MLP
+      'linear', a string function name in torch.nn.functional, or a function.
     intermediate_dropout_rate: Dropout rate used after the intermediate layers.
-    dropout_braodcast_dims: 
-    dtype: Type for the dense layer.
+    dropout_braodcast_dims:
   """
   def __init__(
       self,
@@ -680,7 +759,7 @@ class MlpBlock(nn.Module):
 
 
 class VectorQuantizer(nn.Module):
-  """Vector quantizer layer for VQ-VAE.
+  """Vector quantizer layer for VQ-VAE/ViT-VQGAN.
   Derived from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py.
 
   Attributes:
@@ -688,7 +767,7 @@ class VectorQuantizer(nn.Module):
     e_dim: Dimension of the embeddings.
     beta: Commitment cost used in loss term, beta * ||z_e(x)-sg[e]||^2
   """
-  def __init__(self, n_e: int, e_dim: int, beta: float = 0.25):
+  def __init__(self, n_e: int, e_dim: int, beta: float = 0.25, uniform_init=False, legacy=True, l2_norm=False):
     super().__init__()
     self.n_e = n_e
     self.e_dim = e_dim
@@ -696,13 +775,22 @@ class VectorQuantizer(nn.Module):
 
     self.embedding = nn.Embedding(n_e, e_dim)
     # default_embedding_init = nn.initializers.variance_scaling(1.0, 'fan_in', 'normal', out_axis=0)
-    nn.init.kaiming_normal_(self.embedding.weight, mode='fan_in', nonlinearity='linear')
+    if uniform_init:
+      nn.init.uniform_(self.embedding.weight, b=2.0)
+    else:
+      nn.init.kaiming_normal_(self.embedding.weight, mode='fan_in', nonlinearity='linear')
+    self.legacy = legacy
+    self.l2_norm = l2_norm # l2 normalization for ViT-VQGAN
   
   def get_codebook_entry(self, indices, shape=None):
     # shape specifying (batch, height, width, channel)
 
     # get quantized latent vectors
     z_q = self.embedding(indices)
+
+    if self.l2_norm:
+      # normalize latent variable (Ze(x) in the paper)
+      z_q = F.normalize(z_q, dim=-1)
 
     if shape is not None:
       z_q = z_q.view(shape)
@@ -715,20 +803,30 @@ class VectorQuantizer(nn.Module):
     # reshape z -> (batch, height, width, channel) and flatten
     z = einops.rearrange(z, 'b c h w -> b h w c').contiguous()
     z_flattened = z.view(-1, self.e_dim)
+    embedding_weight = self.embedding.weight
+    if self.l2_norm:
+      z_flattened = F.normalize(z_flattened, dim=-1)
+      embedding_weight = F.normalize(embedding_weight, dim=-1)
     # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
 
     d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-        torch.sum(self.embedding.weight**2, dim=1) - 2 * \
-        torch.einsum('bd,dn->bn', z_flattened, einops.rearrange(self.embedding.weight, 'n d -> d n'))
+        torch.sum(embedding_weight ** 2, dim=1) - 2 * \
+        torch.einsum('bd,nd->bn', z_flattened, embedding_weight)
     
     min_encoding_indices = torch.argmin(d, dim=1)
-    z_q = self.embedding(min_encoding_indices).view(z.shape)
+    z_q = self.get_codebook_entry(min_encoding_indices).view(z.shape)
+    z_norm = F.normalize(z, dim=-1) if self.l2_norm else z
+
     perplexity = None
     min_encodings = None
 
     # compute loss for embedding
-    loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
-            torch.mean((z_q - z.detach()) ** 2)
+    if self.legacy:
+      loss = torch.mean((z_q.detach() - z_norm) ** 2) + self.beta * \
+              torch.mean((z_q - z_norm.detach()) ** 2)
+    else:
+      loss = self.beta * torch.mean((z_q.detach() - z_norm) ** 2) + \
+              torch.mean((z_q - z_norm.detach()) ** 2)
 
     # preserve gradients
     z_q = z + (z_q - z).detach()

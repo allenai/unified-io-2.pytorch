@@ -97,7 +97,7 @@ class ResidualAttentionBlock(nn.Module):
   def __init__(self, config):
     super().__init__()
     self.config = config
-    self.ln_1 = layers.LayerNorm(config.emb_dim, eps=1e-6)
+    self.ln_1 = nn.LayerNorm(config.emb_dim, eps=1e-6)
     self.attn = MultiHeadDotProductAttention(
         config.emb_dim,
         config.num_heads,
@@ -106,7 +106,7 @@ class ResidualAttentionBlock(nn.Module):
         # The uio2 jax code did not use this parameter.
         # float32_logits=config.float32_attention_logits
     )
-    self.ln_2 = layers.LayerNorm(config.emb_dim, eps=1e-6)
+    self.ln_2 = nn.LayerNorm(config.emb_dim, eps=1e-6)
     self.mlp = MLP(config)
   
   def forward(self, x, attn_mask):

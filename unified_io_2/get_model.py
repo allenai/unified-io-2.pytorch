@@ -11,7 +11,7 @@ from unified_io_2.input_modalities import InputImageViTEncoder, InputImageHistor
 from unified_io_2.modality_processing import UnifiedIOPreprocessing
 from unified_io_2.model import UnifiedIO
 from unified_io_2.target_modalities import TargetTextEncoder, TargetImageVQGANEmbedder, \
-  TargetAudioDVAEEmbedder
+  TargetAudioVQGANEmbedder
 from unified_io_2.image_embedder import ImageFeature
 
 DEFAULT_SEQUENCE_LEN = {
@@ -111,7 +111,7 @@ def get_target_modalities(
   if 'image' in target_modality:
     out['image'] = TargetImageVQGANEmbedder(image_vqgan_config)
   if 'audio' in target_modality:
-    out['audio'] = TargetAudioDVAEEmbedder(audio_vqgan_config)
+    out['audio'] = TargetAudioVQGANEmbedder(audio_vqgan_config)
   return out
 
 
@@ -134,9 +134,9 @@ def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, U
 if __name__ == "__main__":
   # TODO remove for release
   import torch
-  print("Building and Initializing pytorch uio2-xxl-3M, all modalities to image/text...")
+  print("Building and Initializing pytorch uio2-xxl-3M, all to all...")
   model_config = config.XXL
-  model_config.target_modalities = tuple(['text', 'image'])
+  model_config.target_modalities = tuple(['text', 'image', 'audio'])
   input_encoders = get_input_modalities(
     model_config.input_modalities, model_config.image_vit_cfg, model_config.audio_vit_cfg,
     model_config.image_history_cfg, model_config.audio_history_cfg, model_config.use_image_vit, model_config.use_audio_vit,
@@ -144,14 +144,14 @@ if __name__ == "__main__":
   )
   target_encoders = get_target_modalities(
     model_config.target_modalities, model_config.image_vqgan, model_config.audio_vqgan)
-  print("Instantiating uio2-xxl, all modalities to image/text...")
+  print("Instantiating uio2-xxl, all to all...")
   model = UnifiedIO(model_config.t5_config, input_encoders, target_encoders)
   from unified_io_2.convert_checkpoint import load_checkpoint
   print("Loading and converting numpy xxl-3M model to pytorch model state dict...")
   ckpt = load_checkpoint(
     "/home/sanghol/projects/unified-io-2.pytorch/checkpoints/unified-io-2_xxl_instructional_tunning_3M.npz",
     input_modalities=('text', 'image', 'image_history', 'audio', 'audio_history'),
-    target_modalities=('text', 'image'),
+    target_modalities=('text', 'image', 'audio'),
   )
   print("Initializing the model with the loaded state dict...")
   model.load_state_dict(ckpt)
