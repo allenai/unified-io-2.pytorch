@@ -13,7 +13,7 @@ from PIL import Image
 from transformers import LogitsProcessor
 
 from unified_io_2 import config
-from unified_io_2.audio_hifigan.models import Generator as HifiganGenerator
+from unified_io_2.hifigan.models import Generator as HifiganGenerator
 from unified_io_2.modality_processing import UnifiedIOPreprocessing
 from unified_io_2.prompt import Prompt
 from unified_io_2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
@@ -172,9 +172,15 @@ class SpectogramConverter:
     self.hifigan = None
 
   def __call__(self, spectogram):
+    """
+    Args:
+      spectogram: UIO2 spectogram [128, 256, 1]
+
+    Returns waveform with 16000 sampling rate
+    """
     if self.use_hi_fi_gan:
       if self.hifigan is None:
-        src = join(dirname(__file__), "audio_hifigan")
+        src = join(dirname(__file__), "hifigan")
         logging.info("Loading hi-fi-gan")
         config_file = f"{src}/checkpoints/config.json"
         checkpoint = f"{src}/checkpoints/g_00930000"
@@ -182,7 +188,7 @@ class SpectogramConverter:
           json_config = json.load(f)
         torch_device = torch.device("cpu")
 
-        class ObjConfig:  # `Generator` needs attribute lookup, so buitl a dum
+        class ObjConfig:  # `Generator` uses attribute lookup, so wrap the json in a dummy class
           def __getattr__(self, item):
             return json_config[item]
 
@@ -219,9 +225,9 @@ class SpectogramConverter:
 class TaskRunner:
   """Wraps a UIO2 model and UIO2 preprocessor and does a set of tasks.
 
-  This is intended mostly to demonstrate how to use the model for these different tasks,
-  to run these tasks efficiently we recommend batching the input and running the pre-processing
-  inside a DataLoader.
+  This is intended mostly to demonstrate how to use the model for these different tasks.
+  To run these tasks efficiently we recommend batching the input and running
+  the pre-processing inside a DataLoader.
   """
 
   def __init__(self, model, uio2_preprocessor: UnifiedIOPreprocessing, prompts=None,

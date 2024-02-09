@@ -129,7 +129,11 @@ def get_model(config: Config, tokenizer_path) -> Tuple[UnifiedIOPreprocessing, U
     config.target_modalities, config.image_vqgan, config.audio_vqgan)
   preprocessor = UnifiedIOPreprocessing(
     input_encoders, target_encoders, config.sequence_length, tokenizer_path)
-  model = UnifiedIO(config.t5_config, input_encoders, target_encoders)
+  model = UnifiedIO(
+    config.t5_config,
+    {k: v.get_encoder(config.t5_config) for k, v in input_encoders.items()},
+    {k: v.get_encoder(config.t5_config) for k, v in target_encoders.items()},
+  )
   return preprocessor, model
 
 

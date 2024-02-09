@@ -1,9 +1,10 @@
-
+import copy
 import math
 from typing import Any, Optional, Tuple, List
 
 import torch
 import torch.nn as nn
+from huggingface_hub import PyTorchModelHubMixin
 from torch.nn import functional as F
 from transformers import GenerationMixin, Cache, LlamaModel, DynamicCache, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -173,13 +174,14 @@ class DecoderLayer(nn.Module):
 
 
 class Decoder(nn.Module, GenerationMixin):
-  """A stack of decoder layers as a part of an encoder-decoder architecture."""
+  """A stack of decoder layers"""
 
   main_input_name = "input_ids"
 
   def __init__(self, config: T5Config):
     super().__init__()
-    self.config = config
+    self.config = copy.deepcopy(config)
+    self.config.is_encoder_decoder = False
     n = config.num_decoder_layers
     for lyr in range(self.config.num_decoder_layers):
       enable_xattention = False
@@ -190,17 +192,6 @@ class Decoder(nn.Module, GenerationMixin):
 
     self.decoder_norm = layers.RMSNorm(config.emb_dim)
     self.drop = layers.Dropout(p=config.dropout_rate, broadcast_dims=(-2,))
-    self.generation_config = GenerationConfig(
-      bos_token_id=0,
-      eos_token_id=1,
-      # We generally use 0 for padding, but having pad==bos triggesrs a superfluous
-      # warning from GenerationMixin so we just tell it to use 1 to keep it quiet
-      pad_token_id=1,
-
-      # TODO these seems to produce warnings, can we prevent them?
-      top_k=None,
-      length_penalty=0
-    )
 
   def forward(
     self,
@@ -213,7 +204,7 @@ class Decoder(nn.Module, GenerationMixin):
     decoder_bias=None,
     attn_pattern_mask=None,
 
-    # Use for inference
+    # Used for inference
     input_ids=None,
     past_key_values: Optional[DynamicCache] = None,
     return_dict=False,
@@ -352,17 +343,13 @@ class Decoder(nn.Module, GenerationMixin):
   def device(self):
     return self.decoder_norm.scale.device
 
-  def _reorder_cache(self, past_key_values, beam_idx):
-    raise ValueError()
 
+class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
+  """UnifiedIO Model"""
 
-class UnifiedIO(nn.Module, GenerationMixin):
-  """An encoder-decoder Transformer model."""
   def __init__(self, t5_config, input_encoders, target_encoders) -> None:
     super().__init__()
     self.config = t5_config
-    self.input_encoders = input_encoders
-    self.target_encoders = target_encoders
 
     cfg = t5_config
 
@@ -385,14 +372,10 @@ class UnifiedIO(nn.Module, GenerationMixin):
     }
 
     # Encode input modalities
-    self.input_embedders = nn.ModuleDict(
-      {k: v.get_encoder(cfg)
-       for k, v in self.input_encoders.items()})
+    self.input_embedders = nn.ModuleDict(input_encoders)
 
     # Encode target modalities
-    self.target_embedders = nn.ModuleDict(
-      {k: v.get_encoder(cfg)
-       for k, v in self.target_encoders.items()})
+    self.target_embedders = nn.ModuleDict(target_encoders)
 
     self.encoder = Encoder(cfg)
     self.decoder = Decoder(cfg)
@@ -472,12 +455,31 @@ class UnifiedIO(nn.Module, GenerationMixin):
   def generate(
       self,
       batch,
+      generation_config=None,
       modality="text",
       negative_prompt=None,
       guidance_scale=10,
       **kwargs,
   ):
-    if modality not in self.target_encoders:
+    if generation_config is None:
+      # Build default config
+      generation_config = GenerationConfig(
+        bos_token_id=0,
+        eos_token_id=1,
+        # We generally use 0 for padding, but having pad==bos triggesrs a superfluous
+        # warning from GenerationMixin so we just tell it to use 1 to keep it quiet
+        pad_token_id=1,
+      )
+
+      if modality != "text":
+        # Change defaults if not doing text
+        if kwargs.get("do_sample"):
+          generation_config.top_k = None
+          generation_config.top_p = 0.95
+        else:
+          generation_config.length_penalty = 0
+
+    if modality not in self.target_embedders:
       raise ValueError(f"No target encoder for {modality}")
 
     if modality != "text":
@@ -522,6 +524,7 @@ class UnifiedIO(nn.Module, GenerationMixin):
 
     out = self.decoder.generate(
       **kwargs,
+      generation_config=generation_config,
       modality=modality,
       input_ids=input_ids,
       logit_weights=self.shared_embedding[modality].weight,
