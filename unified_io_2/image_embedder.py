@@ -1,9 +1,14 @@
-from typing import TYPE_CHECKING, ContextManager, Dict, List, Mapping, Optional, TypeVar, Union, Any
+"""Model that builds patch features from an image"""
+import math
+from typing import Any, Optional
+
+import torch
 
 from unified_io_2.config import ImageVitFeatureConfig, AudioVitFeatureConfig
 
-from unified_io_2.utils import *
 from unified_io_2 import layers
+from torch import nn
+from torch.nn import functional as F
 
 
 class MLP(nn.Module):

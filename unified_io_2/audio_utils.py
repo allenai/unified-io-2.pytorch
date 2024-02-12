@@ -1,11 +1,11 @@
+"""Utility functions for pre-processing audio"""
 import logging
 import subprocess
 from os.path import exists
-from typing import Optional
+from typing import Optional, List
 
 import numpy as np
 import scipy
-from scipy.io import wavfile
 
 from unified_io_2 import config
 
@@ -62,44 +62,25 @@ def read_audio_file(src, sr=config.AUDIO_SAMPLING_RATE):
   return waveform
 
 
-def make_spectrogram(waveform, sample_rate=16000, n_fft=1024, hop_length=256):
-  """
-  Make spectrogram from waveform
-
-  :param waveform: wave file
-  :param sample_rate: Sample rate
-  :param eps: eps value for converting to log-mel-scaled spectrogram
-
-  params for the librosa function
-  - n_fft: number of samples in window for DFT, at default sampling rate of 22050, this is 69.65ms
-  - hop_length: number of samples from the start of one window to start of the next
-  - n_mels: number of bins on the mel scale
-
-  where time frames = math.floor(sample_rate * duration / hop_length) + 1
-                376 = (22050 * 10s / 588) + 1
-
-  Manually selected by Sangho parameters had best sound quality during tests
-  https://librosa.org/doc/main/generated/librosa.stft.html - Faster if n_fft is a power of two
-
-  :return:
-  """
+def make_spectrogram(waveform, sample_rate=16000):
+  """Make spectrogram from waveform"""
   try:
     from librosa.feature import melspectrogram
   except ImportError as e:
     raise ValueError("Librosa must be install for audio pre-processing", e)
+
+  # Parameters we manually selected for sound quality
   params = {
-    'n_fft': n_fft,                      # Manually selected by Sangho
-    'hop_length': hop_length,            # Manually selected by Sangho
-    'window': scipy.signal.windows.hann, # Default
-    'n_mels': 128,                       # Manually selected by Sanho
-    'fmin': 0.0,                         # Manually selected by Sangho
-    'fmax': sample_rate / 2.0,           # Default 22050
+    'n_fft': 1024,
+    'hop_length': 256,
+    'window': scipy.signal.windows.hann,
+    'n_mels': 128,
+    'fmin': 0.0,
+    'fmax': sample_rate / 2.0,
     'center': True,
     'pad_mode': 'reflect',
-  }                                    # Spectrogram therefore has shape (64, 626) for 10s
+  }
   mel = melspectrogram(y=waveform, sr=sample_rate, **params)
-  # log_mel = np.log(mel + eps) - np.log(eps)
-  # return log_mel
   return mel
 
 
@@ -109,7 +90,8 @@ def extract_spectrograms_from_audio(
     audio_segment_length: float = config.AUDIO_SEGMENT_LENGTH,
     spectrogram_length: float = config.AUDIO_SPECTRUM_LENGTH,
     sampling_rate: int = config.AUDIO_SAMPLING_RATE,
-):
+) -> List[np.ndarray]:
+  """Turns a waveform in a list of melspectograms UIO2 can process"""
   num_segments = get_num_segments(audio_length, audio_segment_length)
   boundaries = np.linspace(
     0, num_segments * audio_segment_length, num_segments + 1
@@ -153,7 +135,7 @@ def extract_spectrograms_from_audio(
 
     # Create spectrogram from waveform
     spectrogram = make_spectrogram(
-      waveform_segment, sampling_rate, n_fft=1024, hop_length=256
+      waveform_segment, sampling_rate,
     )  # shape (128, 256)
     spectrograms.append(spectrogram)
 
@@ -173,6 +155,7 @@ def load_audio(
     spectrogram_length=config.AUDIO_SEGMENT_LENGTH,
     max_audio_length:  Optional[float] = None,
 ):
+  """Loads audio as a spectrogram from `path`"""
   if not exists(path):
     raise FileNotFoundError(f"{path} not found")
   audio_length = get_audio_length(path)

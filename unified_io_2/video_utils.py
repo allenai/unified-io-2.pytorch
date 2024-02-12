@@ -1,25 +1,14 @@
+"""Video utils for video pre-processing"""
 import logging
 import os.path
-import random
-import string
 import subprocess
-import time
-import warnings
 from io import BytesIO
-from pathlib import Path
-from typing import Union
 
 import numpy as np
-import scipy
-from scipy.io import wavfile
 
-from unified_io_2 import config
 from unified_io_2.audio_utils import read_audio_file, extract_spectrograms_from_audio
 
-try:
-  from skvideo import io as skvideo_io
-except ImportError:
-  skvideo_io = None
+from skvideo import io as skvideo_io
 
 
 # found by trial and error with ffmpeg

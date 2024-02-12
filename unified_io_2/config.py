@@ -1,5 +1,7 @@
+"""Configuration settings used in UIO2"""
+import dataclasses
 from dataclasses import dataclass, field
-from typing import Any, Sequence, Optional, List, Union, Dict, Tuple
+from typing import Any, Sequence, Dict, Tuple
 
 import torch
 import math
@@ -9,6 +11,7 @@ from unified_io_2.vocabulary import SentencePieceVocabulary
 PAD_ID = 0
 EOS_ID = 1
 BOS_ID = 0
+MAX_TEXT_LEN = 512
 
 # Constants used when encoding region
 VOCAB_START = 200
@@ -29,8 +32,7 @@ RANDOM_SCALE_MAX = 1.3333
 RANDOM_SCALE_MIN = 0.75
 RANDOM_SCALE_RATIO = 0.5
 
-# With CLIP backbone.
-# IMAGE_INPUT_SIZE = [256, 256]
+# Image pre-processing
 IMAGE_INPUT_SIZE = [384, 384]
 IMAGE_INPUT_D = 16
 IMAGE_INPUT_PATCHES = (IMAGE_INPUT_SIZE[0] // IMAGE_INPUT_D, IMAGE_INPUT_SIZE[1] // IMAGE_INPUT_D)
@@ -48,9 +50,6 @@ DIMENSION_RANGE = [0, 6]
 DEPTH_RANGE = [-0.001, 0.1]
 ANGLE_RANGE = [0, 6.283185307179586]
 
-TOKENIZER  = "llama"
-PAD_ONE_SIDE = False
-
 # Controls input/output audio sizes
 AUDIO_INPUT_SIZE = [256, 128]
 AUDIO_INPUT_D = 16
@@ -62,6 +61,7 @@ AUDIO_SEGMENT_LENGTH = 4.08
 AUDIO_SPECTRUM_LENGTH = 4.08
 AUDIO_SAMPLING_RATE = 16000
 
+# Used for audio pre-processing
 AUDIOSET_MEAN = -5.0945
 AUDIOSET_STD = 3.8312
 AUDIO_VIT_MEAN = -4.26
@@ -77,6 +77,11 @@ else:
 
 
 def get_tokenizer(path):
+  """Gets the UIO2 tokenizer
+
+  This is the LLaMaTokenizer but with bos=0, pad=0, eos=1. `path` should point to a
+  `llama_tokenizer.model` file
+  """
   return SentencePieceVocabulary(
     path,
     extra_ids=DEFAULT_EXTRA_IDS,
@@ -89,26 +94,17 @@ def get_tokenizer(path):
 
 @dataclass
 class T5Config:
+  """Configures the main transformer"""
   vocab_size: int = 33280
   image_vocab_size: int = 16512
   image_patch_size: int = 16
-  image_vit_patch_size: int = 16
   audio_vocab_size: int = 8320
-  audio_patch_size: int = 16
-  audio_vit_patch_size: int = 16
-  
-  image_raw_emb_dim: int = 0
-  audio_raw_emb_dim: int = 0
-  
-  # Activation dtypes.
-  dtype: Any = torch.float32
   emb_dim: int = 512
   num_heads: int = 8
   num_encoder_layers: int = 6
   num_decoder_layers: int = 6
   head_dim: int = 64
   mlp_dim: int = 2048
-  # Activation functions are retrieved from Flax.
   mlp_activations: Sequence[str] = ('silu', 'linear')
   dropout_rate: float = 0.0
   dropout_broadcast_dims: Sequence[int] = (-2, )
@@ -116,44 +112,42 @@ class T5Config:
   logits_via_embedding: bool = True
   # Whether to accumulate attention logits in float32 regardless of dtype.
   float32_attention_logits: bool = True
+  decoder_xattention_internval: int = 1
+  qk_norm: bool = True
+  dalle_attn_mask: bool = True
+  # Whether to use dynamic masking when computing the loss of a target image
+  dynamic_unk_mask: bool = True
+
+  # Used to for ROPE
   encoder_max_image_length: int = IMAGE_INPUT_PATCHES[0]*IMAGE_INPUT_PATCHES[1]
   encoder_max_audio_length: int = 128
-  encoder_max_text_length: int = 512
+  encoder_max_text_length: int = MAX_TEXT_LEN
   decoder_max_image_length: int = 1024
   decoder_max_audio_length: int = 512
-  decoder_max_text_length: int = 512
-  decoder_xattention_internval: int = 1
-  visual_backbone_type: str = None
-  visual_backbone_feature: str = None
+  decoder_max_text_length: int = MAX_TEXT_LEN
+  text_pos_emb: str = 'llama_rope' # '1d-sincos' # 'learnable'
+  image_pos_emb: str = 'llama_rope'
+  audio_pos_emb: str = 'llama_rope'
+  image_history_pos_emb: str = 'llama_rope'
+  audio_history_pos_emb: str = 'llama_rope'
+
+  # Used for encoding and pre-processing input modalities
+  image_tokenizer_type: str = "vqgan"
   default_image_size: Sequence[int] = (256, 256)
   default_image_vit_size: Sequence[int] = tuple(IMAGE_INPUT_SIZE) # for vit-large model
   default_image_history_vit_size: Sequence[int] = (256, 256)
   default_audio_size: Sequence[int] = (256, 128)
   default_audio_vit_size: Sequence[int] = (256, 128)
   default_audio_history_vit_size: Sequence[int] = (256, 128)
-  text_pos_emb: str = 'llama_rope' # '1d-sincos' # 'learnable'
-  image_pos_emb: str = 'llama_rope'
-  audio_pos_emb: str = 'llama_rope'
-  image_history_pos_emb: str = 'llama_rope'
-  audio_history_pos_emb: str = 'llama_rope'
-  qk_norm: bool = True
-  use_cross_abs_pos_bias: bool = False
-  use_learned_abs_pos_bias: bool = False
+  image_vit_patch_size: int = 16
+  audio_patch_size: int = 16
+  audio_vit_patch_size: int = 16
 
-  dynamic_unk_mask: bool = True
-  dalle_attn_mask: bool = True
-  
-  image_tokenizer_type: str = "vqgan" # vitvqgan, vqgan, movq
 
-  @property
-  def is_encoder_decoder(self):
-    # FIXME need this so we can call generate on the Decoder
-    return False
-
+# Modality-specific processing configs
 
 @dataclass
 class VQGANConfig:
-  # VQGAN CONFIG
   embed_dim: int = 4
   n_embed: int = 16384
   double_z: bool = False
@@ -166,10 +160,10 @@ class VQGANConfig:
   num_res_blocks: int = 2
   attn_resolutions: Sequence[int] = (32,)
   dropout: float = 0
-  dtype: Any = 'float32'
   default_input_size: Sequence[int] = (256,256)
   patch_size: Sequence[int] = (8, 8)
   checkpoint_path: str = ''
+
 
 @dataclass
 class ImageVitFeatureConfig:
@@ -186,7 +180,7 @@ class ImageVitFeatureConfig:
   float32_attention_logits: bool = True
   default_input_size: Sequence[int] = (256, 256)
   num_pos: int = 197
-  dtype: Any = 'float32'
+
 
 @dataclass
 class AudioVitFeatureConfig:
@@ -204,11 +198,10 @@ class AudioVitFeatureConfig:
   float32_attention_logits: bool = True
   default_input_size: Sequence[int] = (256, 128)
   transpose_input: bool = True
-  dtype: Any = 'float32'
+
 
 @dataclass
 class ImageResamplerConfig:
-  dtype: Any = 'float32'
   resampler_type: str = "perceiver" # linear, perceiver, v2
   max_frames: int = 8
   latents_size: int = 32
@@ -229,10 +222,10 @@ class ImageResamplerConfig:
   attn_scaled_cosine: bool = False
   float32_attention_logits: bool = True
   clip_attn_logit: Any = None
-  
+
+
 @dataclass
 class AudioResamplerConfig:
-  dtype: Any = 'float32'
   resampler_type: str = "perceiver" # perceiver, attention
   max_frames: int = 8
   latents_size: int = 16
@@ -253,6 +246,7 @@ class AudioResamplerConfig:
   attn_scaled_cosine: bool = False
   float32_attention_logits: bool = True
   clip_attn_logit: Any = None
+
 
 @dataclass
 class ImageViTVQGANConfig:
@@ -278,7 +272,6 @@ class ImageViTVQGANConfig:
   use_bias: bool = False
   act_fn: str = 'relu'
   # Misc.
-  dtype: Any = 'float32'
   default_input_size: Sequence[int] = (256,256)
   patch_size: Sequence[int] = (8, 8)
 
@@ -312,7 +305,6 @@ class AudioViTVQGANConfig:
   use_bias: bool = False
   act_fn: str = 'relu'
   # Misc.
-  dtype: Any = 'float32'
   default_input_size: Sequence[int] = (128, 256) # we need to keep this to make it
   patch_size: Sequence[int] = (8, 8)
 
@@ -324,8 +316,6 @@ class AudioViTVQGANConfig:
 
 DEFAULT_SEQUENCE_LEN = {
   "is_training": True,
-  "text_inputs": 512,
-  "text_targets": 512,
   "image_input_samples": 576,
   "image_history_input_samples": 256,
   "audio_input_samples": 128,
@@ -339,6 +329,7 @@ TARGET_MODALITIES = ['text', 'image', 'audio']
 
 @dataclass
 class Config:
+  """Complete config that includes pre-processing and modality-specific configs"""
   t5_config: T5Config
   image_history_cfg: ImageResamplerConfig=ImageResamplerConfig()
   audio_history_cfg: AudioResamplerConfig=AudioResamplerConfig()
@@ -346,9 +337,6 @@ class Config:
   input_modalities: Tuple = tuple(INPUT_MODALITIES)
   target_modalities : Tuple = tuple(TARGET_MODALITIES)
   sequence_length: Dict = field(default_factory=lambda: dict(DEFAULT_SEQUENCE_LEN))
-
-  # Other configuration parts the same default for all model sizes, they don't need to be changed
-  # unless experimenting with new models
   image_vqgan: VQGANConfig=VQGANConfig()
   audio_vqgan: AudioViTVQGANConfig=AudioViTVQGANConfig()
   image_vit_cfg: ImageVitFeatureConfig=ImageVitFeatureConfig()
@@ -358,7 +346,24 @@ class Config:
   use_image_history_vit: bool = True
   use_audio_history_vit: bool = True
 
+  def to_dict(self) -> Dict:
+    return dataclasses.asdict(self)
 
+  @staticmethod
+  def from_dict(data: Dict) -> 'Config':
+    return Config(
+      t5_config=T5Config(**data["t5_config"]),
+      image_history_cfg=ImageResamplerConfig(**data["image_history_cfg"]),
+      audio_history_cfg=AudioResamplerConfig(**data["audio_history_cfg"]),
+      image_vqgan=VQGANConfig(**data["image_vqgan"]),
+      audio_vqgan=AudioViTVQGANConfig(**data["audio_vqgan"]),
+      image_vit_cfg=ImageVitFeatureConfig(**data["image_vit_cfg"]),
+      audio_vit_cfg=AudioVitFeatureConfig(**data["audio_vit_cfg"]),
+      **{k: v for k, v in data.items() if not ("cfg" in k or "vqgan" in k or k == "t5_config")}
+    )
+
+
+# Configs used for our trained models
 LARGE = Config(
   t5_config=T5Config(
     emb_dim=1024,

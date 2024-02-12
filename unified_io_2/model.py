@@ -1,17 +1,20 @@
 import copy
+import json
 import math
-from typing import Any, Optional, Tuple, List
+from os.path import join
+from typing import Any, Optional, Tuple, List, Dict, Union
 
 import torch
 import torch.nn as nn
 from huggingface_hub import PyTorchModelHubMixin
 from torch.nn import functional as F
-from transformers import GenerationMixin, Cache, LlamaModel, DynamicCache, GenerationConfig
+from transformers import GenerationMixin, DynamicCache, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.utils import ModelOutput
+from transformers.utils import ModelOutput, CONFIG_NAME
 
 from unified_io_2.config import Config, T5Config
 from unified_io_2 import seq_features, layers
+from unified_io_2.get_modality_processor import get_input_modalities, get_target_modalities
 from unified_io_2.runner import ClfFreeGuidanceProcessor
 from unified_io_2.seq_features import InputSequence
 from unified_io_2.utils import unflatten_dict, pad_and_cat
@@ -22,7 +25,7 @@ class EncoderLayer(nn.Module):
   def __init__(self, config: T5Config):
     super().__init__()
     dim = config.emb_dim
-    self.pre_attention_norm = layers.RMSNorm(dim)
+    self.pre_attention_norm = layers.UIOLayerNorm(dim)
     self.attention = layers.MultiHeadDotProductAttention(
       dim,
       config.num_heads,
@@ -31,7 +34,7 @@ class EncoderLayer(nn.Module):
       float32_logits=config.float32_attention_logits,
       qk_norm=config.qk_norm,
     )
-    self.pre_mlp_norm = layers.RMSNorm(dim)
+    self.pre_mlp_norm = layers.UIOLayerNorm(dim)
     self.drop = layers.Dropout(config.dropout_rate, broadcast_dims=(-2, ))
     self.mlp = layers.MlpBlock(dim, config.mlp_dim, config.mlp_activations,
                                intermediate_dropout_rate=config.dropout_rate)
@@ -68,7 +71,7 @@ class Encoder(nn.Module):
     self.drop = layers.Dropout(config.dropout_rate, broadcast_dims=(-2, ))
     for lyr in range(config.num_encoder_layers):
       self.add_module(f'layers_{lyr}', EncoderLayer(config))
-    self.encoder_norm = layers.RMSNorm(config.emb_dim)
+    self.encoder_norm = layers.UIOLayerNorm(config.emb_dim)
     self.config = config
 
   def forward(self, seq: InputSequence):
@@ -101,17 +104,17 @@ class DecoderLayer(nn.Module):
     self.layer_idx = layer_idx
 
     dim = config.emb_dim
-    self.pre_self_attention_norm = layers.RMSNorm(dim)
+    self.pre_self_attention_norm = layers.UIOLayerNorm(dim)
     self.self_attention = layers.MultiHeadDotProductAttention(
       dim, config.num_heads, config.head_dim, qk_norm=config.qk_norm,
       float32_logits=config.float32_attention_logits, layer_idx=layer_idx)
 
     if enable_xattention:
-      self.pre_cross_attention_norm = layers.RMSNorm(dim)
+      self.pre_cross_attention_norm = layers.UIOLayerNorm(dim)
       self.encoder_decoder_attention = layers.MultiHeadDotProductAttention(
         dim, config.num_heads, config.head_dim, dropout_rate=config.dropout_rate, float32_logits=config.float32_attention_logits, qk_norm=config.qk_norm)
 
-    self.pre_mlp_norm = layers.RMSNorm(dim)
+    self.pre_mlp_norm = layers.UIOLayerNorm(dim)
     self.drop = layers.Dropout(config.dropout_rate, broadcast_dims=(-2, ))
     self.mlp = layers.MlpBlock(dim, config.mlp_dim, config.mlp_activations,
                                intermediate_dropout_rate=config.dropout_rate)
@@ -190,7 +193,7 @@ class Decoder(nn.Module, GenerationMixin):
       self.add_module(f'layers_{lyr}', DecoderLayer(
         config, enable_xattention, layer_idx=lyr))
 
-    self.decoder_norm = layers.RMSNorm(config.emb_dim)
+    self.decoder_norm = layers.UIOLayerNorm(config.emb_dim)
     self.drop = layers.Dropout(p=config.dropout_rate, broadcast_dims=(-2,))
 
   def forward(
@@ -212,7 +215,7 @@ class Decoder(nn.Module, GenerationMixin):
     output_hidden_states=False,
     logit_weights=None,
   ):
-    if output_attentions:
+    if output_attentions or output_hidden_states:
       raise NotImplementedError()
 
     cfg = self.config
@@ -228,11 +231,11 @@ class Decoder(nn.Module, GenerationMixin):
         decoder_embedding.shape[-1] != decoder_pos_emb.shape[-1] and
         decoder_pos_emb.shape[-1] == encoder_pos_emb.shape[-1]
     )
-    assert not use_rope or not cfg.use_cross_abs_pos_bias
     encoder_sinusoids = encoder_pos_emb if use_rope else None
     decoder_sinusoids = decoder_pos_emb if use_rope else None
 
     return_kv_cache = []
+    hidden_state = []
     for lyr_ix in range(cfg.num_decoder_layers):
       # [batch, length, emb_dim] -> [batch, length, emb_dim]
 
@@ -268,7 +271,6 @@ class Decoder(nn.Module, GenerationMixin):
       logits = logits / math.sqrt(y.shape[-1])
       return CausalLMOutputWithPast(
         logits=logits,
-        hidden_states=y if output_hidden_states else None,
         past_key_values=past_key_values
       )
     else:
@@ -315,7 +317,7 @@ class Decoder(nn.Module, GenerationMixin):
       seq = embed_token_id(
         input_ids, mask=torch.ones_like(input_ids, dtype=torch.int32, device=device))
       encoder_decoder_mask = layers.make_attention_mask(
-        seq.mask, encoder_mask).to(cfg.dtype)
+        seq.mask, encoder_mask).to(seq.embed.dtype)
       decoder_attn_mask = layers.make_decoder_mask(seq.mask)
 
     if use_cache:
@@ -344,14 +346,34 @@ class Decoder(nn.Module, GenerationMixin):
     return self.decoder_norm.scale.device
 
 
-class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
+class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
   """UnifiedIO Model"""
 
-  def __init__(self, t5_config, input_encoders, target_encoders) -> None:
+  def __init__(self, config, input_encoders=None, target_encoders=None):
     super().__init__()
-    self.config = t5_config
+    if isinstance(config, dict):  # Support create from dictionary for `PyTorchModelHubMixin`
+      config = Config.from_dict(config)
 
-    cfg = t5_config
+    if isinstance(config, Config):
+      # Initialize from full Config
+      assert input_encoders is None
+      assert target_encoders is None
+      input_encoders = get_input_modalities(
+        config.input_modalities, config.image_vit_cfg, config.audio_vit_cfg,
+        config.image_history_cfg, config.audio_history_cfg, config.use_image_vit, config.use_audio_vit,
+        config.freeze_vit, config.use_image_history_vit, config.use_audio_history_vit,
+      )
+      input_encoders = {k: v.get_encoder(config.t5_config) for k, v in input_encoders.items()}
+      target_encoders = get_target_modalities(
+        config.target_modalities, config.image_vqgan, config.audio_vqgan)
+      target_encoders = {k: v.get_encoder(config.t5_config) for k, v in target_encoders.items()}
+      cfg = config.t5_config
+      self.full_config = config
+    else:
+      # Initialize from a T5Config and the input/target encoders
+      cfg = config
+      self.full_config = None
+    self.config = cfg
 
     self.text_token_embedder = nn.Embedding(
       num_embeddings=cfg.vocab_size,
@@ -380,9 +402,39 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
     self.encoder = Encoder(cfg)
     self.decoder = Decoder(cfg)
 
+  def set_modalities(
+      self,
+      input_modalities=None,
+      target_modalities=None
+  ):
+    if input_modalities:
+      if not all(x in self.input_embedders for x in input_modalities):
+        raise ValueError("Requested an input modality that does not exist")
+      self.input_embedders = nn.ModuleDict({k: self.input_embedders[k] for k in input_modalities})
+    if target_modalities:
+      if not all(x in self.target_embedders for x in target_modalities):
+        raise ValueError("Requested a target modality that does not exist")
+      self.target_embedders = nn.ModuleDict({k: self.target_embedders[k] for k in target_modalities})
+
   @property
   def device(self):
     return self.text_token_embedder.weight.device
+
+  def to_dtype(self, dtype, vit_dtype, vqgan_dtype):
+    param_to_dtype = dict()  # torch tensors are hashed by id
+    for k in ["audio", "image"]:
+      if k in self.target_embedders:
+        for param in self.target_embedders[k].vqgan.parameters():
+          param_to_dtype[param] = vit_dtype
+      if k in self.input_embedders:
+        for param in self.input_embedders[k].image_encoder.parameters():
+          param_to_dtype[param] = vqgan_dtype
+
+    def _convert(t):
+      _dtype = param_to_dtype.get(t, dtype)
+      return t.to(_dtype)
+
+    self._apply(_convert)
 
   @torch.no_grad()
   def score_answer_options(
@@ -419,7 +471,7 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       raise NotImplementedError("Only batch 1 supported")
     encoder_hidden = self.encoder(input_seq)
     encoder_decoder_mask = layers.make_attention_mask(
-      target_seq.mask, input_seq.mask).to(self.config.dtype)
+      target_seq.mask, input_seq.mask).to(encoder_hidden.dtype)
     options = options.to(torch.long)  # for cross entropy
     decoder_attn_mask = layers.make_decoder_mask(target_seq.mask)
 
@@ -461,6 +513,19 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       guidance_scale=10,
       **kwargs,
   ):
+    """Generate outputs
+
+    Args:
+      batch: batch of pre-preprocessed data, target features are ignored
+      generation_config: `GenerationConfig` to use
+      modality: text, image, or audio, modality to encode
+      negative_prompt: batch to use for classifier free guidance
+      guidance_scale: scale of classifier free guidance
+      **kwargs: Most other parameters for `GenerationMixin.generate` should work, but fair warning
+                we haven't tested everything and some will not be supported
+
+    Returns: text tokens, an image, or a spectrogram depending on `modality`
+    """
     if generation_config is None:
       # Build default config
       generation_config = GenerationConfig(
@@ -486,12 +551,17 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       if kwargs.get("max_new_tokens") is not None or kwargs.get("min_new_tokens") is not None:
         raise ValueError("non-text modalities cannot set generation length")
       # Need this many tokens to get a complete image/audio output
+      # `min_new_tokens` unfortunately breaks `ClfFreeGuidanceProcessor` because it inserts
+      # inf., so for now don't set it
       if modality == "image":
         kwargs["max_new_tokens"] = 1024
       else:
         kwargs["max_new_tokens"] = 512
 
     if negative_prompt is not None:
+      # GenerationMixin's CLF free guidance did not look like it would play nice with how
+      # we do Generation, so we do our own version here by appending the negative
+      # examples to the batch
       joint_batch = {}
       assert set(negative_prompt) == set(batch)
       for k, neg_v in negative_prompt.items():
@@ -501,13 +571,17 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
           # This is a bit wasteful, but for now just encode the same negative prompt multiple times
           neg_v = neg_v.expand(*([batch_v.shape[0]] + [-1]*(len(batch_v.shape)-1)))
         elif batch[k].shape[0] != negative_prompt[k].shape[0]:
-          raise ValueError("Negative prompt must have mismistached batch sizes")
+          raise ValueError("Negative prompt has mismistached batch size")
         joint_batch[k] = pad_and_cat(batch_v, neg_v)
       batch = joint_batch
       processors = kwargs.get("logits_processor", [])
       processors.append(ClfFreeGuidanceProcessor(alpha=guidance_scale))
       kwargs["logits_processor"] = processors
       kwargs["_clf_free_guidance"] = True
+
+    # Using `GenerationMixin` requires a bit of finessing since it hard-codes some assumptions
+    # about how the subclass works that aren't true for our model. To make this easier
+    # we manually do the encoding here then call generate on the decoder
 
     batch = unflatten_dict(batch)
     input_seq = self.encode_batch(batch["inputs"])
@@ -519,6 +593,7 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
     input_ids = torch.zeros((bs, 1), dtype=torch.long, device=input_seq.embed.device)
 
     def embed_token_id(input_id, mask, cur_index=None):
+      # Turn a generated input id into an embedding
       return self.target_embedders[modality](
           input_id, mask=mask, cur_index=cur_index, shared_embed=self.shared_embedding[modality])
 
@@ -534,6 +609,7 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       encoder_mask=mask,
     )
 
+    # post-processing
     if isinstance(out, ModelOutput):
       tokens = out[0]
       output_dict = out
@@ -555,7 +631,6 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       images = self.target_embedders["image"].vqgan.decode_code(tokens)
       images = torch.clip((images+1)/2, 0, 1)
       images = torch.permute(images, [0, 2, 3, 1])
-      # TODO handle return output dictionary
       if output_dict is None:
         return images
       else:
@@ -577,7 +652,7 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
         output_dict["spectogram"] = spectogram
 
     if output_dict is not None:
-      return out
+      return output_dict
     else:
       return tokens
 
@@ -592,7 +667,14 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
   def forward(
       self,
       batch,
-  ) -> torch.Tensor:
+  ) -> Dict[str, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Forward pass to compute the loss of examples in `batch`
+
+    Args:
+      batch: batch of pre-processing
+
+    Returns: dictionary of (logits, targets, masks) for each modaltiy in the batch
+    """
     cfg = self.config
     features = unflatten_dict(batch, sep="/")
 
@@ -614,7 +696,7 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
     target_seq = seq_features.concat_sequences(target_parts)
 
     encoder_decoder_mask = layers.make_attention_mask(
-      target_seq.mask, input_seq.mask).to(cfg.dtype)
+      target_seq.mask, input_seq.mask).to(target_seq.input_embedding.dtype)
     all_subsegments = target_seq.get_all_subsegments()
 
     decoder_attn_mask = layers.make_decoder_mask(
@@ -649,3 +731,11 @@ class UnifiedIO(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       logits[name] = (modality_logits, targets, mask)
 
     return logits
+
+  def _save_pretrained(self, save_directory) -> None:
+    if self.full_config is None:
+      raise ValueError("Must be built from Config to be saved")
+    super()._save_pretrained(save_directory)
+    data = self.full_config.to_dict()
+    with open(join(save_directory, CONFIG_NAME), "w") as f:
+      json.dump(data, f)

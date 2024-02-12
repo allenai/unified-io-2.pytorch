@@ -1,11 +1,14 @@
 """VQGAN model implementation in PyTorch
 Derived from https://github.com/CompVis/taming-transformers.
 """
-from typing import TYPE_CHECKING, ContextManager, Dict, List, Mapping, Optional, TypeVar, Union, Any
+import math
+
+import torch
+from einops import einops
 
 from unified_io_2.config import VQGANConfig
-
-from unified_io_2.utils import *
+from torch import nn
+from torch.nn import functional as F
 from unified_io_2 import layers
 
 

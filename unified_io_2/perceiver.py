@@ -1,9 +1,12 @@
-from typing import TYPE_CHECKING, ContextManager, Dict, List, Mapping, Optional, TypeVar, Union, Any
+"""Resampler used for history inputs"""
+from typing import Union
+
+import torch
 
 from unified_io_2.config import ImageResamplerConfig, AudioResamplerConfig
 
-from unified_io_2.utils import *
 from unified_io_2 import layers
+from torch import nn
 
 
 class CrossAttention(nn.Module):
@@ -11,7 +14,7 @@ class CrossAttention(nn.Module):
     """Cross-attention layer."""
     super().__init__()
     self.config = config
-    self.pre_xattention_norm = layers.RMSNorm(config.emb_dim)
+    self.pre_xattention_norm = layers.UIOLayerNorm(config.emb_dim)
     self.xattention = layers.MultiHeadDotProductAttention(
       emb_dim=config.emb_dim,
       num_heads=config.num_heads,
@@ -25,7 +28,7 @@ class CrossAttention(nn.Module):
     )
     self.dropout = layers.Dropout(p=config.dropout_rate, broadcast_dims=config.dropout_broadcast_dims)
     self.post_xattn_droppath = layers.DropPath(droppath_rate)
-    self.pre_mlp_norm = layers.RMSNorm(config.emb_dim)
+    self.pre_mlp_norm = layers.UIOLayerNorm(config.emb_dim)
     self.mlp = layers.MlpBlock(
       emb_dim=config.emb_dim,
       intermediate_dim=config.mlp_dim,
@@ -70,7 +73,7 @@ class Attention(nn.Module):
     """Self-attention layer."""
     super().__init__()
     self.config = config
-    self.pre_attention_norm = layers.RMSNorm(config.emb_dim)
+    self.pre_attention_norm = layers.UIOLayerNorm(config.emb_dim)
     self.attention = layers.MultiHeadDotProductAttention(
       emb_dim=config.emb_dim,
       num_heads=config.num_heads,
@@ -84,7 +87,7 @@ class Attention(nn.Module):
     )
     self.dropout = layers.Dropout(p=config.dropout_rate, broadcast_dims=config.dropout_broadcast_dims)
     self.post_attn_droppath = layers.DropPath(droppath_rate)
-    self.pre_mlp_norm = layers.RMSNorm(config.emb_dim)
+    self.pre_mlp_norm = layers.UIOLayerNorm(config.emb_dim)
     self.mlp = layers.MlpBlock(
       emb_dim=config.emb_dim,
       intermediate_dim=config.mlp_dim,
@@ -127,8 +130,8 @@ class PerceiverResampler(nn.Module):
     self.latents = nn.Parameter(torch.empty(config.latents_size, config.emb_dim))
     # default_embedding_init = nn.initializers.variance_scaling(1.0, 'fan_in', 'normal', out_axis=0)
     nn.init.kaiming_normal_(self.latents, mode='fan_in', nonlinearity='linear')
-    self.context_norm = layers.RMSNorm(config.emb_dim)
-    self.perceiver_norm = layers.RMSNorm(config.emb_dim)
+    self.context_norm = layers.UIOLayerNorm(config.emb_dim)
+    self.perceiver_norm = layers.UIOLayerNorm(config.emb_dim)
 
     dpr = [x.item() for x in torch.linspace(0, config.droppath_rate, config.num_layers)]
     for lyr in range(config.num_layers):
@@ -146,7 +149,7 @@ class PerceiverResampler(nn.Module):
     embed = embed.reshape((bs, seq_len, dim))
     query_mask = torch.ones([bs, self.config.latents_size], dtype=mask.dtype, device=mask.device)
     key_mask = mask.reshape((bs, seq_len))
-    latents = torch.unsqueeze(self.latents, axis=0)
+    latents = torch.unsqueeze(self.latents, dim=0)
     latents = latents.expand(bs, -1, -1).to(embed.dtype)
 
     embed = self.context_norm(embed)

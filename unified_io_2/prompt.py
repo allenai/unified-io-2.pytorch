@@ -1,3 +1,4 @@
+"""Task-specific prompts"""
 from collections import defaultdict
 import numpy as np
 
@@ -461,7 +462,7 @@ PROMPT_DICT['Audio_Generation'] = dict(
   original=[
     'Synthesize the sound based on the description "{}"',
   ],
-  manual = [
+  manual=[
     '{}',
     'Generate the sound based on the description: {}',
     'What might \"{}\" sound like?',
@@ -495,6 +496,8 @@ PROMPT_DICT['Audio_Generation'] = dict(
 
 
 class Prompt:
+  """Utility class to access prompts"""
+
   def __init__(self, original_flag=True, manual_flag=True,
                gpt3_flag=True, single_prompt=False):
     self.prompt_list = []

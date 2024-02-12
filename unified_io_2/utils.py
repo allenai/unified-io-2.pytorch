@@ -1,22 +1,11 @@
 """Utility functions for training and inference."""
-import math
-import pickle
-import sys
-from contextlib import nullcontext
-from io import BytesIO
-from pathlib import Path
-from typing import TYPE_CHECKING, ContextManager, Dict, List, Mapping, Optional, TypeVar, Union
+from typing import Union
 
-import lightning as L
-import torch
-import torch.nn as nn
-from torch.nn import functional as F
-import torch.utils._device
-from lightning.fabric.strategies import FSDPStrategy
-from lightning.fabric.utilities.load import _lazy_load as lazy_load
-from torch.serialization import normalize_storage_type
 import numpy as np
 import tensorflow as tf
+import torch
+import torch.utils._device
+from torch.nn import functional as F
 
 
 def flatten_dict(d, sep="/"):
@@ -158,3 +147,4 @@ def undo_image_preprocessing(image, image_info, gray_scale=False,
   if to_int:
     image = tf.image.convert_image_dtype(image, dtype=tf.uint8)
   return image.numpy()
+

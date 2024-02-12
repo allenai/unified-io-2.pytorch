@@ -1,18 +1,17 @@
-from dataclasses import dataclass
+"""Target modality processing"""
 from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
 import numpy as np
 
-
-from unified_io_2.data_utils import trim_or_pad_tf, make_autoregressive_inputs
+from unified_io_2.config import T5Config, VQGANConfig, AudioViTVQGANConfig
+from unified_io_2.data_utils import make_autoregressive_inputs
 from unified_io_2.input_modalities import ModalityEncoder
 from unified_io_2.seq_features import TargetSequence
-from unified_io_2.vqgan import VQGAN
-from unified_io_2.vitvqgan import ViTVQGAN
-from unified_io_2.config import *
-from unified_io_2 import layers, config, seq_features
+from unified_io_2.image_vqgan import VQGAN
+from unified_io_2.audio_vqgan import ViTVQGAN
+from unified_io_2 import layers, config
 import tensorflow as tf
 
 
@@ -62,51 +61,29 @@ class TextEmbedder(nn.Module):
 
 class TargetTextEncoder(ModalityEncoder):
   """Tokenize and embed input text, handles multiple target texts"""
-  def __init__(self):
-    super().__init__()
 
   def preprocess_inputs(self, features, vocab, sequence_length) -> Dict:
     text_targets = features.get(f"text_targets")
-    if text_targets is None:
-      # TODO maybe this should completely empty?
-      text_targets = tf.constant([config.EOS_ID], tf.int32)
-
-    max_len = sequence_length.get(f"text_targets", 512)
-    if isinstance(text_targets, str) or text_targets.dtype == tf.dtypes.string:
-      text_targets = vocab.encode_tf(text_targets)
-
-    text_targets = text_targets[..., :max_len-1]
-
-    if isinstance(text_targets, tf.RaggedTensor):
+    if "segment_ids" in features:
       raise NotImplementedError()
+    if text_targets is None:
+      return {}
+
+    if isinstance(text_targets, str):
+      tokens = tf.convert_to_tensor(vocab.encode(text_targets))
     else:
-      if tf.shape(text_targets)[0] == 0 or text_targets[-1] != config.EOS_ID:
-        text_targets = tf.pad(text_targets, paddings=[[0, 1]], constant_values=config.EOS_ID)
+      tokens = text_targets
 
-    return dict(
-      tokens=text_targets,
-    )
-
-  def convert_inputs(self, features, sequence_length) -> Dict:
-    # Support old style and new style sequence_lengths
-    text_len = tf.shape(features["tokens"])[0]
-    if text_len is None:
-      text_len = sequence_length["targets/text/tokens"]
-    # vocab = get_default_vocabulary()
-    for k, v in features.items():
-      # TODO trimming here is a bit questionable since it might trim EOS, trimming
-      # should really happen between tokenization and appending EOS, but keep for now
-      # since older versions did this too
-      features[k] = trim_or_pad_tf(v, text_len, pad_constant=config.PAD_ID)
-    tokens = features.pop("tokens")
-
-    features["targets"] = tokens
-    features["inputs"] = make_autoregressive_inputs(
-      tokens, sequence_id=features.get("segment_ids"), bos_id=config.BOS_ID)
-    features["pos_ids"] = tf.range(text_len, dtype=tf.int32)
-    features["segment_ids"] = tf.ones((text_len,), dtype=tf.int32)
-    features["mask"] = tf.cast(tokens > config.PAD_ID, tf.int32)
-    return features
+    tokens = tokens[..., :config.MAX_TEXT_LEN-1]
+    tokens = tf.pad(tokens, paddings=[[0, 1]], constant_values=config.EOS_ID)
+    sh = tokens.shape[0]
+    return {
+      "targets": tokens,
+      "inputs": make_autoregressive_inputs(tokens, bos_id=config.BOS_ID),
+      "pos_ids": tf.range(sh, dtype=tf.int32),
+      "segment_ids": tf.ones((sh,), dtype=tf.int32),
+      "mask": tf.cast(tokens > config.PAD_ID, tf.int32)
+    }
 
   def get_encoder(self, config: T5Config) -> nn.Module:
     return TextEmbedder(config)
@@ -274,10 +251,11 @@ class TargetImageVQGANEmbedder(ModalityEncoder):
   def __init__(self, config):
     super().__init__()
     self.config = config
+
   def preprocess_inputs(
       self, features: Dict, tokenizer, sequence_length) -> Optional[Dict[str, tf.Tensor]]:
-    image_target_size = IMAGE_TARGET_SIZE
-    image_target_d = IMAGE_TARGET_D
+    image_target_size = config.IMAGE_TARGET_SIZE
+    image_target_d = config.IMAGE_TARGET_D
     target_padding_size = tf.constant(
       np.array(image_target_size) / image_target_d, tf.int32)
 
@@ -285,12 +263,7 @@ class TargetImageVQGANEmbedder(ModalityEncoder):
     image_target_masks = features.pop("image_target_masks", None)
     image_target_task_masks = features.pop("image_target_task_masks", None)
     if image_targets is None:
-      assert image_target_masks is None
-      assert 'image_target_loss_masks' not in features
-      assert image_target_task_masks is None
-      image_targets = tf.zeros(image_target_size+[0], tf.float32)
-      image_target_masks = tf.zeros([0], tf.int32)
-      image_target_task_masks = tf.zeros([0], tf.int32)
+      return {}
     else:
       image_targets = image_targets * 2.0 - 1  # VQGAN pre-processing
       # In case the dimension were unknown
@@ -325,25 +298,6 @@ class TargetImageVQGANEmbedder(ModalityEncoder):
       loss_mask=loss_mask,
       task_mask=image_target_task_masks,
     )
-
-  def convert_inputs(self, features: Optional[Dict], sequence_length) -> Dict[str, tf.Tensor]:
-    image_len = (IMAGE_TARGET_SIZE[0] // IMAGE_TARGET_D) \
-                * (IMAGE_TARGET_SIZE[1] // IMAGE_TARGET_D)
-    image_trm_len =  image_len
-    image_shape = IMAGE_TARGET_SIZE + [3]
-    if tf.shape(features["image"])[-1] == 0:
-      features = {
-        'image': tf.zeros(image_shape, tf.float32),
-        'mask': tf.zeros((image_trm_len,), tf.int32),
-        'loss_mask': tf.zeros((image_len,), tf.int32),
-        'task_mask': tf.zeros((image_trm_len,), tf.int32),
-      }
-    features["loss_mask"] = tf.ensure_shape(features["loss_mask"], [image_len])
-    features["mask"] = tf.ensure_shape(features["mask"], [image_len])
-    features["task_mask"] = tf.ensure_shape(features["task_mask"], [image_len])
-
-    features["image"] = tf.ensure_shape(features["image"], image_shape)
-    return features
 
   def get_encoder(self, config: T5Config) -> nn.Module:
     return ImageVQGAN(config, self.config)
@@ -478,9 +432,8 @@ class TargetAudioVQGANEmbedder(ModalityEncoder):
 
   def preprocess_inputs(
       self, features: Dict, tokenizer, sequence_length) -> Optional[Dict[str, tf.Tensor]]:
-
-    target_size = AUDIO_TARGET_SIZE
-    target_d = AUDIO_TARGET_D
+    target_size = config.AUDIO_TARGET_SIZE
+    target_d = config.AUDIO_TARGET_D
 
     target_padding_size = tf.constant(
       np.array(target_size) / target_d, tf.int32)
@@ -490,20 +443,14 @@ class TargetAudioVQGANEmbedder(ModalityEncoder):
     target_task_masks = features.pop("audio_target_task_masks", None)
 
     if targets is None:
-      assert target_masks is None
-      assert 'audio_target_loss_masks' not in features
-      assert target_task_masks is None
-      targets = tf.zeros(target_size+[0], tf.float32)
-      target_masks = tf.zeros([0], tf.int32)
-      target_task_masks = tf.zeros([0], tf.int32)
+      return {}
     else:
-      targets = (targets - AUDIOSET_MEAN) / AUDIOSET_STD
+      targets = (targets - config.AUDIOSET_MEAN) / config.AUDIOSET_STD
       # In case the dimension were unknown
       targets = tf.ensure_shape(targets, target_size + [1])
       assert target_masks is not None
       if len(target_masks.shape) == 1:
-        # Given mask is on the patches rather then pixels, used in depth_preprocessing
-        target_masks = target_masks
+        raise ValueError("Mask should be over pixels")
       else:
         target_masks = tf.image.resize(
           tf.expand_dims(target_masks, -1),
@@ -530,27 +477,3 @@ class TargetAudioVQGANEmbedder(ModalityEncoder):
       loss_mask=loss_mask,
       task_mask=target_task_masks,
     )
-
-  def convert_inputs(self, features: Optional[Dict], sequence_length) -> Dict[str, tf.Tensor]:
-
-    target_len = (AUDIO_TARGET_SIZE[0] // AUDIO_TARGET_D) * (AUDIO_TARGET_SIZE[1] // AUDIO_TARGET_D)
-    target_shape = AUDIO_TARGET_SIZE + [1]
-    target_trm_len =  target_len
-
-    if features is None or tf.shape(features["audio"])[-1] == 0:
-      # Replace dummy features with full-sized masked features to keep shape consistent
-      target = tf.zeros(target_shape, tf.float32)
-      features = {
-        'audio': target,
-        'mask': tf.zeros((target_trm_len,), tf.int32),
-        'loss_mask': tf.zeros((target_len,), tf.int32),
-        'task_mask': tf.zeros((target_trm_len,), tf.int32),
-      }
-
-    # If statement can screw up shape info, fix here:
-    features["mask"] = tf.ensure_shape(features["mask"], [target_trm_len])
-    features["loss_mask"] = tf.ensure_shape(features["loss_mask"], [target_len])
-    features["task_mask"] = tf.ensure_shape(features["task_mask"], [target_trm_len])
-
-    features["audio"] = tf.ensure_shape(features["audio"], target_shape)
-    return features

@@ -1,9 +1,9 @@
+"""Runner to use the model for specific tasks"""
 import json
 import logging
 import re
 from os.path import join, dirname
 
-import numpy
 import numpy as np
 import tensorflow as tf
 from typing import List
@@ -14,7 +14,7 @@ from transformers import LogitsProcessor
 
 from unified_io_2 import config
 from unified_io_2.hifigan.models import Generator as HifiganGenerator
-from unified_io_2.modality_processing import UnifiedIOPreprocessing
+from unified_io_2.preprocessing import UnifiedIOPreprocessing
 from unified_io_2.prompt import Prompt
 from unified_io_2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
   extra_id_to_float, extract_locations_from_token_ids, undo_image_preprocessing
@@ -78,6 +78,7 @@ class ForceKeypointPrediction(LogitsProcessor):
 
 
 def extract_labelled_boxes(text):
+  """Extract labelled boxes for UIO2 output text"""
   labels = []
   boxes = []
   for y1, x1, y2, x2, name in labelled_box_re.findall(text):
@@ -161,6 +162,7 @@ class PredictBoxesPreprocessor(LogitsProcessor):
     return scores
 
 
+# Default prompts use to train the model in the classifier free settings
 IMAGE_CLF_FREE_PROMPT = "An image of a random picture."
 AUDIO_CLF_FREE_PROMPT = "A video of a random audio."
 
@@ -226,8 +228,7 @@ class TaskRunner:
   """Wraps a UIO2 model and UIO2 preprocessor and does a set of tasks.
 
   This is intended mostly to demonstrate how to use the model for these different tasks.
-  To run these tasks efficiently we recommend batching the input and running
-  the pre-processing inside a DataLoader.
+  To run these tasks efficiently batch the inputs and run the pre-processing inside a DataLoader.
   """
 
   def __init__(self, model, uio2_preprocessor: UnifiedIOPreprocessing, prompts=None,
@@ -243,12 +244,12 @@ class TaskRunner:
   def tokenizer(self):
     return self.uio2_preprocessor.tokenizer
 
-  def singleton_batch(self, batch):
-    return {k: torch.as_tensor(v, device=self.device)[None, ...] for k, v in batch.items()}
-
   @property
   def device(self):
     return self.model.device
+
+  def singleton_batch(self, batch):
+    return {k: torch.as_tensor(v, device=self.device)[None, ...] for k, v in batch.items()}
 
   def predict_text(self, example, max_tokens, detokenize=True, **gen_args):
     tokens = self.model.generate(
@@ -422,18 +423,20 @@ class TaskRunner:
       all_points.append(self.keypoint_box(image, box)[0])
     return all_points
 
-  def object_detection(self, image, coco_prompt=True, thresh=0.5, nms=0.8):
+  def object_detection(self, image, coco_prompt=True, thresh=0.5, nms=0.8, max_tokens=256):
     """Returns a list of x1 y2 x2 y2 boxes, and list string box labels
 
     note this task can be pretty unreliable for UIO2, particularly for crowded images
     """
     if coco_prompt:
-      prompt = self.prompt.random_prompt("Detection_Generic")
-    else:
+      # Prompt used for the COCO training data
       prompt = self.prompt.random_prompt("Detection_COCO")
+    else:
+      # Prompt for other detection datasets, can result in detecting more classes
+      prompt = self.prompt.random_prompt("Detection_Generic")
     batch = self.uio2_preprocessor(text_inputs=prompt, image_inputs=image, target_modality="text")
     out = self.predict_text(
-      batch, max_tokens=512, logits_processor=[PredictBoxesPreprocessor(thresh)])
+      batch, max_tokens=max_tokens, logits_processor=[PredictBoxesPreprocessor(thresh)])
     boxes, labels = extract_labelled_boxes(out)
     if len(boxes) > 0:
       boxes = boxes*config.IMAGE_INPUT_SIZE[0]

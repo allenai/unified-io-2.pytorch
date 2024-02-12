@@ -1,13 +1,11 @@
-torch>=2.1.0
-lightning @ git+https://github.com/Lightning-AI/lightning@800b87eb464bda8defa9425bb0b76651c5c5175b
-jsonargparse[signatures]  # CLI
-einops
-tensorflow_text
-tensorflow
 transformers
-sentencepiece
 numpy
 scipy
-protobuf==3.20.*
-pillow
+tensorflow  # Some of our pre-processing code is still in tensorflow
+sentencepiece  # For the tokenizer
+einops
+protobuf==3.20.*  # Downgrade, new versions cannot load the tokenizer
 tqdm
+pillow  # For image processing
+librosa  # For audio processing
+scikit-video  # For video processing

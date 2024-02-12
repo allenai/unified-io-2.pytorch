@@ -1,3 +1,4 @@
+"""Audio ViT that builds features from spectograms"""
 from typing import Any, Optional
 import torch
 

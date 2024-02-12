@@ -1,3 +1,7 @@
+"""Layers used for the model
+
+Many of these are ports
+"""
 import functools
 import operator
 import math
@@ -240,8 +244,6 @@ class LayerNorm(nn.LayerNorm):
 
 
 class Dropout(nn.Dropout):
-  """Subclass torch's LayerNorm to handle variable broadcast dims.
-  """
   def __init__(self, p: float = 0.5, inplace: bool = False, broadcast_dims: Sequence[int] = ()):
     super().__init__(p, inplace)
     self.broadcast_dims = broadcast_dims
@@ -303,12 +305,8 @@ class QuickGELU(nn.Module):
     return x * torch.sigmoid(1.702 * x)
     
 
-class RMSNorm(nn.Module):
-  """Root Mean Square Layer Normalization.
-
-  Derived from https://github.com/bzhangGo/rmsnorm/blob/master/rmsnorm_torch.py. BSD 3-Clause License:
-  https://github.com/bzhangGo/rmsnorm/blob/master/LICENSE.
-  """
+class UIOLayerNorm(nn.Module):
+  """Layer norm used in the UIO2 Trasnformers, follows T5 and has no bias or mean subtraction"""
 
   def __init__(self, size: int, dim: int = -1, eps: float = 1e-6) -> None:
     super().__init__()
@@ -317,10 +315,6 @@ class RMSNorm(nn.Module):
     self.dim = dim
 
   def forward(self, x: torch.Tensor) -> torch.Tensor:
-    # NOTE: the original RMSNorm paper implementation is not equivalent
-    # norm_x = x.norm(2, dim=self.dim, keepdim=True)
-    # rms_x = norm_x * d_x ** (-1. / 2)
-    # x_normed = x / (rms_x + self.eps)
     orig_type = x.dtype
     x = x.to(torch.float32)
     norm_x = torch.mean(x * x, dim=self.dim, keepdim=True)
@@ -384,12 +378,6 @@ def make_decoder_mask(token_mask,
 
   mask = mask[:, None, :, :]  # head dim
   return mask
-
-
-def make_causal_mask(seq_len):
-  idxs = torch.arange(seq_len, dtype=torch.int32)
-  mask = idxs[None, :] <= idxs[:, None]
-  return mask[None, None, :, :]
 
 
 def combine_masks(*masks: Optional[torch.Tensor]):
@@ -566,8 +554,8 @@ class MultiHeadDotProductAttention(nn.Module):
     # qknorm
     self.qk_norm = qk_norm
     if qk_norm:
-      self.query_norm = RMSNorm(head_dim)
-      self.key_norm = RMSNorm(head_dim)
+      self.query_norm = UIOLayerNorm(head_dim)
+      self.key_norm = UIOLayerNorm(head_dim)
     
     # scaled cosine attention
     self.scaled_cosine = scaled_cosine
@@ -800,8 +788,12 @@ class VectorQuantizer(nn.Module):
     return z_q
   
   def forward(self, z: torch.Tensor):
-    # reshape z -> (batch, height, width, channel) and flatten
-    z = einops.rearrange(z, 'b c h w -> b h w c').contiguous()
+    # reshape z -> to channel first, then flatten
+    sh = z.shape
+    if len(sh) == 4:
+      z = einops.rearrange(z, 'b c h w -> b h w c').contiguous()
+    # else:
+    #   z = einops.rearrange(z, 'b c w -> b w c').contiguous()
     z_flattened = z.view(-1, self.e_dim)
     embedding_weight = self.embedding.weight
     if self.l2_norm:
@@ -832,6 +824,9 @@ class VectorQuantizer(nn.Module):
     z_q = z + (z_q - z).detach()
 
     # reshape back to match original input shape
-    z_q = einops.rearrange(z_q, 'b h w c -> b c h w').contiguous()
+    if len(sh) == 4:
+      z_q = einops.rearrange(z_q, 'b h w c -> b c h w').contiguous()
+    # else:
+    #   z_q = einops.rearrange(z_q, 'b w c -> b c w').contiguous()
 
     return z_q, loss, (perplexity, min_encodings, min_encoding_indices.to(torch.int32))

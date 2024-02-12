@@ -1,15 +1,8 @@
+"""Utility pre-processing functions"""
 from typing import Optional
-import functools
 
 import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
-from tensorflow.python.ops.image_ops_impl import _ImageDimensions, _CheckAtLeast3DImage, _assert, _is_tensor
-import numpy as np
-
-from tensorflow.python.framework import ops
-from tensorflow.python.ops import array_ops
-
-import logging
 
 from unified_io_2 import config
 
@@ -33,7 +26,6 @@ def apply_with_random_selector(x, func, num_cases):
 
 def get_non_empty_box_indices(boxes):
   """Get indices for non-empty boxes."""
-  # Selects indices if box height or width is 0.
   height = boxes[:, 2] - boxes[:, 0]
   width = boxes[:, 3] - boxes[:, 1]
   indices = tf.where(
@@ -129,77 +121,6 @@ def denormalize_boxes(boxes, image_shape):
     return denormalized_boxes
 
 
-def pad_to_bounding_box(image, offset_height, offset_width, target_height,
-                        target_width, value=0):
-
-  return pad_to_bounding_box_internal(
-    image,
-    offset_height,
-    offset_width,
-    target_height,
-    target_width,
-    check_dims=True,
-    value=value)
-
-
-def pad_to_bounding_box_internal(image, offset_height, offset_width,
-                                 target_height, target_width, check_dims, value):
-
-  with ops.name_scope(None, 'pad_to_bounding_box_with_one_internal', [image]):
-    image = ops.convert_to_tensor(image, name='image')
-
-    is_batch = True
-    image_shape = image.get_shape()
-    if image_shape.ndims == 3:
-      is_batch = False
-      image = array_ops.expand_dims(image, 0)
-    elif image_shape.ndims is None:
-      is_batch = False
-      image = array_ops.expand_dims(image, 0)
-      image.set_shape([None] * 4)
-    elif image_shape.ndims != 4:
-      raise ValueError(
-        '\'image\' (shape %s) must have either 3 or 4 dimensions.' %
-        image_shape)
-
-    batch, height, width, depth = _ImageDimensions(image, rank=4)
-
-    after_padding_width = target_width - offset_width - width
-
-    after_padding_height = target_height - offset_height - height
-
-    if check_dims:
-      assert_ops = _CheckAtLeast3DImage(image, require_static=False)
-      assert_ops += _assert(offset_height >= 0, ValueError,
-                            'offset_height must be >= 0')
-      assert_ops += _assert(offset_width >= 0, ValueError,
-                            'offset_width must be >= 0')
-      assert_ops += _assert(after_padding_width >= 0, ValueError,
-                            'width must be <= target - offset')
-      assert_ops += _assert(after_padding_height >= 0, ValueError,
-                            'height must be <= target - offset')
-      image = control_flow_ops.with_dependencies(assert_ops, image)
-
-    # Do not pad on the depth dimensions.
-    paddings = array_ops.reshape(
-      tf.stack([
-        0, 0, offset_height, after_padding_height, offset_width,
-        after_padding_width, 0, 0
-      ]), [4, 2])
-    padded = tf.pad(image, paddings, constant_values=value)
-
-    padded_shape = [
-      None if _is_tensor(i) else i
-      for i in [batch, target_height, target_width, depth]
-    ]
-    padded.set_shape(padded_shape)
-
-    if not is_batch:
-      padded = array_ops.squeeze(padded, axis=[0])
-
-    return padded
-
-
 def resize_and_pad_default(
     image, is_training, is_input=True, masks=None, boxes=None, box_labels=None,
     random_scale_min=None, random_scale_max=None, random_scale_ratio=None,
@@ -207,6 +128,8 @@ def resize_and_pad_default(
 ):
   """Apply `resize_and_pad` with default settings"""
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+  if masks is not None:
+    masks = tf.image.convert_image_dtype(masks, dtype=tf.float32)
   if random_scale_min is None:
     random_scale_min = config.RANDOM_SCALE_MIN
   if random_scale_max is None:
@@ -215,11 +138,13 @@ def resize_and_pad_default(
     random_scale_ratio = config.RANDOM_SCALE_RATIO
   if resize_method is None:
     resize_method ='random' if is_training else tf.image.ResizeMethod.BILINEAR
-  if len(image.shape) == 4 or is_history:
-    assert is_input
+  if is_history:
     output_size = config.IMAGE_HISTORY_INPUT_SIZE
+  elif is_input:
+    output_size = config.IMAGE_INPUT_SIZE
   else:
-    output_size = config.IMAGE_INPUT_SIZE if is_input else config.IMAGE_TARGET_SIZE
+    assert masks is None
+    output_size = config.IMAGE_TARGET_SIZE
   return resize_and_pad(
     image, output_size,
     masks, boxes, box_labels,
@@ -227,16 +152,17 @@ def resize_and_pad_default(
     random_scale_max=random_scale_max,
     do_random_scale=is_training,
     random_scale_ratio=random_scale_ratio,
-    resize_method=resize_method
+    resize_method=resize_method,
+    desired_target_size=config.IMAGE_TARGET_SIZE
   )
 
 
-def resize_and_pad(image, desired_output_size, target_image=None, boxes=None, box_labels=None,
-                   random_scale_min=0.1, random_scale_max=2.0, do_random_scale=False,
-                   shrink_both_sides=True, filter_box=True,
-                   desired_target_size=None, random_scale_ratio=0.0,
-                   resize_method=tf.image.ResizeMethod.BILINEAR,
-                   pad_value=0, boxes_normalized=False):
+def resize_and_pad(
+    image, desired_output_size, target_image=None, boxes=None, box_labels=None,
+    random_scale_min=0.1, random_scale_max=2.0, do_random_scale=False,
+    shrink_both_sides=True, filter_box=True, desired_target_size=None, random_scale_ratio=0.0,
+    resize_method=tf.image.ResizeMethod.BILINEAR, boxes_normalized=False
+):
   """Resizes and pads an input image/video to `desired_output_size`
 
   Support random scaling augmentation if `do_random_scale` is True
@@ -347,11 +273,11 @@ def resize_and_pad(image, desired_output_size, target_image=None, boxes=None, bo
 
   # Get the mask which indicates which regions were padded
   mask = tf.ones(tf.concat([tf.shape(image)[:-1], [1]], 0), dtype=tf.int32)
-  image_mask = tf.squeeze(pad_to_bounding_box(
+  image_mask = tf.squeeze(tf.image.pad_to_bounding_box(
     mask, top_pad, left_pad, desired_height, desired_width), -1)
 
-  image = pad_to_bounding_box(image, top_pad, left_pad, desired_height, desired_width,
-                              value=pad_value)
+  image = tf.image.pad_to_bounding_box(
+    image, top_pad, left_pad, desired_height, desired_width)
 
   if is_video:
     image.set_shape([None, desired_height, desired_width, 3])
@@ -367,15 +293,12 @@ def resize_and_pad(image, desired_output_size, target_image=None, boxes=None, bo
     else:
       target_image = target_image[:, offset_y:offset_y + desired_height, offset_x:offset_x + desired_width]
 
-    target_image = pad_to_bounding_box(target_image, top_pad, left_pad, desired_height, desired_width)
+    target_image = tf.image.pad_to_bounding_box(
+      target_image, top_pad, left_pad, desired_height, desired_width)
     target = tf.image.resize(target_image, desired_target_size,
                              method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    target_mask = tf.image.resize(
-      tf.expand_dims(tf.cast(image_mask==0, tf.float32), -1),
-      desired_target_size,
-      method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
   else:
-    target, target_mask = None, None
+    target = None
 
   indices = None
   if boxes is not None:
@@ -411,7 +334,7 @@ def resize_and_pad(image, desired_output_size, target_image=None, boxes=None, bo
     tf.cast(scaled_width, dtype=tf.float32),
     ])
 
-  outputs = (image_info, (target, target_mask), boxes, box_labels, indices)
+  outputs = (image_info, target, boxes, box_labels, indices)
   return image, image_mask, outputs
 
 
@@ -437,8 +360,28 @@ def trim_or_pad_tf_2d(x, batch, seq_len):
   return tf.ensure_shape(x, sh)
 
 
+def values_to_tokens(vals, clss=None):
+  """Convert real values to quantized text tokens"""
+  vals = tf.convert_to_tensor(vals)
+  num_bins = config.NUM_DETECTION_BIN
+  vocab_start = config.VOCAB_START
+  quantized_boxes = tf.cast(vals * (num_bins-1), tf.int32)
+
+  # For values that were exactly one
+  vals = tf.constant([f'<extra_id_{i}>' for i in range(vocab_start, vocab_start+num_bins)])
+  tokens = tf.gather(vals, quantized_boxes)
+
+  if clss is not None:
+    tokens = tf.concat([tokens, tf.expand_dims(clss, 1)], axis=-1)
+
+  return tokens
+
+
 def _shift_right_by_one(tensor: tf.Tensor, bos_id: int = 0) -> tf.Tensor:
-  """Shift the input tensor to the right by one position without wrapping."""
+  """Shift the input tensor to the right by one position without wrapping
+
+  From seqio: https://github.com/google/seqio
+  """
 
   if not (tensor.dtype.is_integer or tensor.dtype.is_floating):
     raise ValueError(f"Only numeric types are supported. Got: {tensor.dtype}")
@@ -455,28 +398,17 @@ def _shift_right_by_one(tensor: tf.Tensor, bos_id: int = 0) -> tf.Tensor:
   return rolled * mask + (1 - mask) * bos_id
 
 
-def values_to_tokens(vals, clss=None):
-  vals = tf.convert_to_tensor(vals)
-  num_bins = config.NUM_DETECTION_BIN
-  vocab_start = config.VOCAB_START
-  quantized_boxes = tf.cast(vals * (num_bins-1), tf.int32)
-
-  # For values that were exactly one
-  vals = tf.constant([f'<extra_id_{i}>' for i in range(vocab_start, vocab_start+num_bins)])
-  tokens = tf.gather(vals, quantized_boxes)
-
-  if clss is not None:
-    tokens = tf.concat([tokens, tf.expand_dims(clss, 1)], axis=-1)
-
-  return tokens
-
-
 def make_autoregressive_inputs(
     targets: tf.Tensor,
     sequence_id: tf.Tensor = None,
     output_dtype: Optional[tf.dtypes.DType] = None,
     bos_id: int = 0,
 ) -> tf.Tensor:
+  """Shift tokens right and add BOS to build decoder inputs
+
+  from seqio: https://github.com/google/seqio
+  """
+
   output_dtype = output_dtype or targets.dtype
   if sequence_id is not None and not sequence_id.dtype.is_integer:
     raise ValueError(
@@ -507,48 +439,24 @@ def make_autoregressive_inputs(
 def normalize_image(image,
                     offset=(0.48145466, 0.4578275, 0.40821073),
                     scale=(0.26862954, 0.26130258, 0.27577711)):
-  """Normalizes the image to zero mean and unit variance."""
-  offset = tf.constant(offset)
-  offset = tf.expand_dims(offset, axis=0)
-  offset = tf.expand_dims(offset, axis=0)
-  image -= tf.cast(offset, image.dtype)
-
-  scale = tf.constant(scale)
-  scale = tf.expand_dims(scale, axis=0)
-  scale = tf.expand_dims(scale, axis=0)
-  image /= tf.cast(scale, image.dtype)
+  """Normalizes the image by, uses image net scale/offset by default"""
+  shape = [1]*(len(image.shape) - 1) + [3]
+  image -= tf.constant(offset, dtype=image.dtype, shape=shape)
+  image /= tf.constant(scale, dtype=image.dtype, shape=shape)
   return image
-
-
-def normalize_video(video,**kwargs):
-  return tf.map_fn(
-      fn=functools.partial(
-        normalize_image,
-        **kwargs),
-      elems=video)
 
 
 def unnormalize_image(image,
                     offset=(0.48145466, 0.4578275, 0.40821073),
                     scale=(0.26862954, 0.26130258, 0.27577711)):
-  """Normalizes the image to zero mean and unit variance."""
-  scale = tf.cast(tf.expand_dims(tf.expand_dims(tf.constant(scale), axis=0), axis=0), image.dtype)
-  image *= scale
-
-  offset = tf.cast(tf.expand_dims(tf.expand_dims(tf.constant(offset), axis=0), axis=0), image.dtype)
-  image += offset
+  shape = [1]*(len(image.shape) - 1) + [3]
+  image *= tf.constant(scale, dtype=image.dtype, shape=shape)
+  image += tf.constant(offset, dtype=image.dtype, shape=shape)
   return image
 
 
-def unnormalize_video(video, **kwargs):
-  return tf.map_fn(
-    fn=functools.partial(
-      unnormalize_image,
-      **kwargs),
-    elems=video)
-
-
 def sample_patches(mask, n_patches):
+  """Select `n_patches` position from `mask`"""
   input_sample_valid = tf.boolean_mask(tf.range(tf.shape(mask)[0]), mask)
   input_sample_masked = tf.boolean_mask(tf.range(tf.shape(mask)[0]), mask == 0)
   encoder_pos_ids = tf.concat([

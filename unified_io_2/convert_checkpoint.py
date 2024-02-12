@@ -1,10 +1,12 @@
-from time import perf_counter
+"""Maps jax parameters to pytorch ones"""
+from typing import Tuple, Dict
 
 import numpy as np
 import torch
 
 
-def convert_param(name, param):
+def convert_param(name: str, param: np.ndarray) -> Tuple[str, np.ndarray]:
+  """Converts a jax UIO2 name/parameter into a torch name/parameter"""
   parts = name.split(".")
   if len(parts) == 0:
     return name, param
@@ -128,7 +130,8 @@ def convert_param(name, param):
   return ".".join(parts), param
 
 
-def convert_params(params):
+def convert_params(params: Dict) -> Dict:
+  """Convert a dictionary of jax parameters into torch ones"""
   mapped_params = {}
   for k, v in params.items():
     k, v = convert_param(k, v)
@@ -136,19 +139,19 @@ def convert_params(params):
   return mapped_params
 
 
-def flatten_dict(src, prefix, out):
+def flatten_checkpoint(src, prefix, out):
   if isinstance(src, dict):
     for k, v in src.items():
-      flatten_dict(v, prefix + "." + k, out)
+      flatten_checkpoint(v, prefix + "." + k, out)
   elif isinstance(src, np.ndarray) and src.dtype == np.object_:
-    flatten_dict(src.item(), prefix, out)
+    flatten_checkpoint(src.item(), prefix, out)
   else:
     out[prefix] = src
   return {k.lstrip("."): v for k, v in out.items()}
 
 
-def load_checkpoint(
-    checkpoint, input_modalities=("text",), target_modalities=("text",)):
+def load_uio2_checkpoint(checkpoint, input_modalities=("text",), target_modalities=("text",)):
+  """Load UIO2 parameters stored in a npz file as a torch compatible state dict"""
   prefixes = [
     'decoder', 'encoder',
     'audio_token_embedder', 'image_token_embedder', 'text_token_embedder',
@@ -172,7 +175,7 @@ def load_checkpoint(
   if checkpoint.endswith(".npz"):
     params = np.load(checkpoint, allow_pickle=True)
     params = {k: params[k] for k in params if any(k.startswith(x) for x in prefixes)}
-    params = flatten_dict(params, '', {})
+    params = flatten_checkpoint(params, '', {})
     mapped_params = convert_params(params)
   else:
     raise NotImplementedError()

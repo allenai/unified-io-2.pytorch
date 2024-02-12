@@ -1,8 +1,8 @@
+"""Abstracts sequence of tokens we can encode/decode to making mixing modalities easier"""
 import dataclasses
 from typing import Optional, List
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from torch.nn import functional as F
-import numpy as np
 import torch
 
 
@@ -153,8 +153,9 @@ def seq_seq_concat(args):
   return torch.concatenate(out_list, -1)
 
 
-def concat_sequences(seqs: List, seq_lens: Optional[List[int]]=None):
+def concat_sequences(seqs: List):
   """Concats along the sequence dimension (i.e., horizontally)"""
+  seq_lens = [x.seq_len for x in seqs]
   out = {}
   for k in dataclasses.fields(seqs[0]):
     k = k.name
@@ -188,7 +189,8 @@ def concat_sequences(seqs: List, seq_lens: Optional[List[int]]=None):
           elif len(shape) == 4:
             arg_shape = arg_shape[:2] + [seq_lens[ix], seq_lens[ix]]
 
-          padded_args.append(torch.zeros(arg_shape, full_sized[0].dtype))
+          padded_args.append(torch.zeros(
+            *arg_shape, device=full_sized[0].device, dtype=full_sized[0].dtype))
       args = padded_args
     if len(shape) == 4:
       out[k] = seq_seq_concat(args)

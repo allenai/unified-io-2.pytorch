@@ -1,12 +1,11 @@
 """ViTVQGAN model implementation in PyTorch"""
-from typing import TYPE_CHECKING, ContextManager, Dict, List, Mapping, Optional, TypeVar, Union, Any, Sequence, Callable
+import torch
 
 from unified_io_2.config import AudioViTVQGANConfig
 
-from unified_io_2.utils import *
 from unified_io_2 import layers
-import einops
 import math
+from torch import nn
 
 
 class MlpBlock(nn.Module):
