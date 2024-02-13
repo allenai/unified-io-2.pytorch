@@ -59,6 +59,7 @@ def read_audio_file(src, sr=config.AUDIO_SAMPLING_RATE):
   waveform = waveform.astype(np.float32)
   if len(waveform.shape) > 1:
     waveform = np.mean(waveform, axis=1)
+  waveform /= WAV_MAX_VALUE
   return waveform
 
 

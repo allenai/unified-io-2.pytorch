@@ -456,6 +456,20 @@ class TaskRunner:
       ], 1)
     return boxes, labels
 
+  def video_tagging(self, video):
+    """Classify a video
+
+    Args:
+      video: video file path, or a sequence of frames
+
+    Returns: Predicted text class
+    """
+    prompt = self.prompt.random_prompt("video_tagging")
+    batch = self.uio2_preprocessor(
+      text_inputs=prompt, video_inputs=video, use_video_audio=False, target_modality="text")
+    text = self.predict_text(batch, max_tokens=16)
+    return text
+
   def video_captioning(self, video):
     """Caption a video
 
@@ -466,7 +480,7 @@ class TaskRunner:
     """
     prompt = self.prompt.random_prompt("video_captioning")
     batch = self.uio2_preprocessor(
-      text_inputs=prompt, video_inputs=video, target_modality="text")
+      text_inputs=prompt, video_inputs=video, use_video_audio=False, target_modality="text")
     text = self.predict_text(batch, max_tokens=64)
     return text
 

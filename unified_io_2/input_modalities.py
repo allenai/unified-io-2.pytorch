@@ -607,7 +607,7 @@ class InputAudioHistoryViTEncoder(ModalityEncoder):
       encoder_pos_ids = tf.cast(encoder_pos_ids, tf.int32)
 
     # Pad everything to be a constant shape
-    spatial_len = features["input"].shape[1]
+    spatial_len = input.shape[1]
     temporal_len = sequence_length.get('num_frames')
     if temporal_len is None:
       temporal_len = max(sequence_length["inputs/audio_history/input"], 1)
