@@ -215,20 +215,3 @@ class ImageFeature(nn.Module):
   def forward(self, x, mask, pos_ids, *, patch_num: Any = (16, 16)):
     x, x1 = self.vision_transformer(x, mask, pos_ids, patch_num=patch_num)
     return x, x1
-
-
-if __name__ == "__main__":
-  print("Building pytorch vit...")
-  vit_cfg = ImageVitFeatureConfig()
-  image_encoder = ImageFeature(vit_cfg)
-  image_encoder.eval()
-  print("Dummy input...")
-  len = 576 # 384 / 16 * 384 / 16
-  patch_size = 16
-  # [batch, len, 3 * patch_size * patch_size]
-  x = torch.randn(1, len, 3 * patch_size * patch_size)
-  mask = torch.ones([1, len], dtype=torch.int32)
-  pos_ids = torch.arange(len, dtype=torch.int32).view(1, -1)
-  print('Doing inference...')
-  y, y1 = image_encoder(x, mask, pos_ids, patch_num=(24, 24))
-  import pdb; pdb.set_trace()

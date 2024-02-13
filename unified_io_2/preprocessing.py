@@ -44,7 +44,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
     if tokenizer is None:
       raise ValueError("Tokenizer path must be given: `tokenizer=path/to/tokenizer`")
     cfg = Config.from_dict(data["config"])
-    if sequence_length is None:
+    if sequence_length is not None:
       cfg.sequence_length = sequence_length
     return UnifiedIOPreprocessing.from_config(cfg, tokenizer)
 

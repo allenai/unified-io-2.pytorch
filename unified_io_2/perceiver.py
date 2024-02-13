@@ -177,37 +177,3 @@ class Resampler(nn.Module):
   def forward(self, embed, *, mask=None):
     embed = self.perceiver(embed, mask=mask)
     return embed
-
-
-if __name__ == "__main__":
-  import numpy as np
-
-  print("Dummy input...")
-  bs = 1
-  nframes = 1
-  image_history_input_size = (256, 256)
-  audio_history_input_size = (256, 128)
-  patch_size = 16
-  image_len = (image_history_input_size[0] // patch_size) * (image_history_input_size[1] // patch_size) # 256 / 16 * 256 / 16
-  emb_dim = 768
-  image_batch = {
-    'embed': np.random.randn(bs * nframes, image_len, emb_dim).astype(np.float32),
-    'mask': np.ones((bs * nframes, image_len), dtype=np.int32),
-  }
-  audio_len = (audio_history_input_size[0] // patch_size) * (audio_history_input_size[1] // patch_size) # 256 / 16 * 128 / 16
-  audio_batch = {
-    'embed': np.random.randn(bs * nframes, audio_len, emb_dim).astype(np.float32),
-    'mask': np.ones((bs * nframes, audio_len), dtype=np.int32),
-  }
-
-  print("Building pytorch perceiver resampler...")
-  pytorch_resampler_cfg = ImageResamplerConfig()
-  pytorch_resampler = Resampler(pytorch_resampler_cfg)
-  pytorch_resampler.eval()
-
-  print('Doing inference...')
-  with torch.no_grad():
-    latents = pytorch_resampler(
-      **{k: torch.from_numpy(v) for k, v in image_batch.items()},
-    )
-  import pdb; pdb.set_trace()

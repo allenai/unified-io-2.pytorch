@@ -49,7 +49,7 @@ model.set_modalities(input_modalities=["text"], target_modalities=["image"])
 
 This will remove some unneeded parameters from the model.
 
-### Loading from Scratch
+### Initializing from Scratch
 The model can also be built from scratch by directly using a config:
 
 ```
@@ -58,15 +58,14 @@ preprocessor = UnifiedIOPreprocessing.from_config(config.LARGE, /path/to/tokeniz
 model = UnifiedIO(config.LARGE)
 ```
 
-### bfloat16
+### Using bfloat16
 The model can be run in `bfloat16`, typically we have done this while keeping the ViTs
- and VQGANs as float32. To convert the model in this way do:
-
+ and VQGANs as `float32`. To convert the model to this format run:
 ```
 model.to_dtype(torch.bfloat16, vit_dtype=torch.float32, vqgan_dtype=torch.float32)
 ```
 
-We provide pre-trained models in bfloat16 format to reduce memory/bandwidth requirements 
+We provide pre-trained models in this format to reduce memory/bandwidth requirements 
 when downloading/loading the models:  
 
 ```

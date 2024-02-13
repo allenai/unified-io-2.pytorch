@@ -423,7 +423,7 @@ class TaskRunner:
       all_points.append(self.keypoint_box(image, box)[0])
     return all_points
 
-  def object_detection(self, image, coco_prompt=True, thresh=0.5, nms=0.8, max_tokens=256):
+  def object_detection(self, image, coco_prompt=False, thresh=0.5, nms=0.8, max_tokens=256):
     """Returns a list of x1 y2 x2 y2 boxes, and list string box labels
 
     note this task can be pretty unreliable for UIO2, particularly for crowded images

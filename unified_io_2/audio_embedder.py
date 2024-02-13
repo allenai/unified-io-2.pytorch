@@ -223,22 +223,3 @@ class AudioFeature(nn.Module):
       pos_ids = transpose_input(pos_ids, self.config.default_input_size, self.config.patch_size)
     x, x1 = self.vision_transformer(x, mask, pos_ids)
     return x, x1
-
-
-if __name__ == "__main__":
-  # TODO remove for release
-  print("Building pytorch ast...")
-  ast_cfg = AudioVitFeatureConfig()
-  audio_encoder = AudioFeature(ast_cfg)
-  audio_encoder.eval()
-  print("Dummy input...")
-  len = 128 # 256 / 16 * 128 / 16
-  patch_size = 16
-  # [batch, len, 3 * patch_size * patch_size]
-  x = torch.randn(1, len, 1 * patch_size * patch_size)
-  mask = torch.ones([1, len], dtype=torch.int32)
-  pos_ids = torch.arange(len, dtype=torch.int32).view(1, -1)
-  print('Doing inference...')
-  y, y1 = audio_encoder(x, mask, pos_ids, patch_num=(16, 9))
-  import pdb; pdb.set_trace()
-    
