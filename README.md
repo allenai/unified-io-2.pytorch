@@ -1,14 +1,10 @@
 # UnifiedIO-2.PyTorch
 
 This repo is an official pytorch port of [UnifiedIO-2](https://unified-io-2.allenai.org/). The original jax code can be found
-[here](https://github.com/allenai/unified-io-2).
+[here](https://github.com/allenai/unified-io-2). UnifiedIO 2 is a multi-modal multi-task model capable of performing a wide
+range of tasks.
 
-UnifiedIO-2 is a multi-modal system that can generate text, images,
-and audio with text, audio, image, or video as input. It
-can answer free-form queries as well as many particular
-tasks that have been studied in these modalities (e.g., 
-surface normal estimation, keypoint estimation, audio
-captioning, ect.)
+![test](teaser-short.svg)
 
 ## Installation
 Install [pytorch](https://pytorch.org/) following the recommendation for your system. Then install with
@@ -26,7 +22,7 @@ Load the model with
 from unified_io_2.model import UnifiedIOModel
 model = UnifiedIOModel.from_pretrained("allenai/uio2-large")
 ```
-This load the large (1B) model, load the XL (3B) or XXL (7B) with 
+This loads the large (1B) model, load the XL (3B) or XXL (7B) with 
 `chrisc36/uio2-dbg-xl` and `chrisc36/uio2-dbg-xxl`.
 
 This model requires pre-processed tensor inputs. Pre-processing is done by `UnifiedIOPreprocessing`: 
@@ -83,7 +79,7 @@ batch = build_batch([preprocessed_example], device=model.device)
 tokens = model.generate(batch, modality="text", max_new_tokens=128)
 ```
 
-`modaltiy` can be set to `"image"` or `"audio"`. Image will return a `[256, 256, 3]` image, and 
+`modality` can be set to `"image"` or `"audio"`. Image will return a `[256, 256, 3]` image, and 
 audio will return a `[128. 256, 1]` mel-spectrogram. 
 
 To see many other examples of generation and how to best configure the model and post-process
@@ -102,7 +98,7 @@ keypoint = runner.keypoint("/path/to/image")
 
 ### Answer Scoring
 `model.score_answer_options` can compute the loss of several possible
-output given one set of inputs. See `TaskRunner.categorization` or `TaskRunner.box_categorization` to see 
+outputs given one set of inputs. See `TaskRunner.categorization` or `TaskRunner.box_categorization` to see 
 examples of how to use it.  
 
 ```
