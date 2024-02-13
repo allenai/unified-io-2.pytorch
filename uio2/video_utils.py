@@ -6,7 +6,7 @@ from io import BytesIO
 
 import numpy as np
 
-from unified_io_2.audio_utils import read_audio_file, extract_spectrograms_from_audio
+from uio2.audio_utils import read_audio_file, extract_spectrograms_from_audio
 
 from skvideo import io as skvideo_io
 

@@ -12,12 +12,12 @@ from transformers import GenerationMixin, DynamicCache, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput, CONFIG_NAME
 
-from unified_io_2.config import Config, T5Config
-from unified_io_2 import seq_features, layers
-from unified_io_2.get_modality_processor import get_input_modalities, get_target_modalities
-from unified_io_2.runner import ClfFreeGuidanceProcessor
-from unified_io_2.seq_features import InputSequence
-from unified_io_2.utils import unflatten_dict, pad_and_cat
+from uio2.config import Config, T5Config
+from uio2 import seq_features, layers
+from uio2.get_modality_processor import get_input_modalities, get_target_modalities
+from uio2.runner import ClfFreeGuidanceProcessor
+from uio2.seq_features import InputSequence
+from uio2.utils import unflatten_dict, pad_and_cat
 
 
 class EncoderLayer(nn.Module):
@@ -375,6 +375,7 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       self.full_config = None
     self.config = cfg
 
+    # Embeddings used for both prediction and for embedding inputs
     self.text_token_embedder = nn.Embedding(
       num_embeddings=cfg.vocab_size,
       embedding_dim=cfg.emb_dim)
@@ -421,7 +422,7 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
     return self.text_token_embedder.weight.device
 
   def to_dtype(self, dtype, vit_dtype, vqgan_dtype):
-    param_to_dtype = dict()  # torch tensors are hashed by id
+    param_to_dtype = dict()  # works because torch tensors are hashed by identify
     for k in ["audio", "image"]:
       if k in self.target_embedders:
         for param in self.target_embedders[k].vqgan.parameters():
@@ -532,7 +533,7 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
         bos_token_id=0,
         eos_token_id=1,
         # We generally use 0 for padding, but having pad==bos triggesrs a superfluous
-        # warning from GenerationMixin so we just tell it to use 1 to keep it quiet
+        # warning from GenerationMixin so we just tell it 1 to keep it quiet
         pad_token_id=1,
       )
 
@@ -656,7 +657,7 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
     else:
       return tokens
 
-  def encode_batch(self, input_features):
+  def encode_batch(self, input_features) -> seq_features.InputSequence:
     input_parts: List[InputSequence] = []
     for k, v in self.input_embedders.items():
       if k in input_features:
@@ -735,7 +736,7 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
   def _save_pretrained(self, save_directory) -> None:
     if self.full_config is None:
       raise ValueError("Must be built from Config to be saved")
-    super()._save_pretrained(save_directory)
+    super()._save_pretrained(save_directory)  # Saves the weights
     data = self.full_config.to_dict()
     with open(join(save_directory, CONFIG_NAME), "w") as f:
       json.dump(data, f)

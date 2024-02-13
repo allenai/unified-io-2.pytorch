@@ -6,7 +6,7 @@ from typing import Any, Sequence, Dict, Tuple
 import torch
 import math
 
-from unified_io_2.vocabulary import SentencePieceVocabulary
+from uio2.vocabulary import SentencePieceVocabulary
 
 PAD_ID = 0
 EOS_ID = 1

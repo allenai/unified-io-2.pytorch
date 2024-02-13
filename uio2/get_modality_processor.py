@@ -1,14 +1,14 @@
 from typing import Dict, Tuple
 
-from unified_io_2 import config
-from unified_io_2.audio_embedder import AudioFeature
-from unified_io_2.config import ImageVitFeatureConfig, AudioVitFeatureConfig, ImageResamplerConfig, \
+from uio2 import config
+from uio2.audio_embedder import AudioFeature
+from uio2.config import ImageVitFeatureConfig, AudioVitFeatureConfig, ImageResamplerConfig, \
   AudioResamplerConfig, AudioViTVQGANConfig, VQGANConfig
-from unified_io_2.input_modalities import InputImageViTEncoder, InputImageHistoryViTEncoder, \
+from uio2.input_modalities import InputImageViTEncoder, InputImageHistoryViTEncoder, \
   InputAudioViTEncoder, InputAudioHistoryViTEncoder, InputTextEncoder, ModalityEncoder
-from unified_io_2.target_modalities import TargetTextEncoder, TargetImageVQGANEmbedder, \
+from uio2.target_modalities import TargetTextEncoder, TargetImageVQGANEmbedder, \
   TargetAudioVQGANEmbedder
-from unified_io_2.image_embedder import ImageFeature
+from uio2.image_embedder import ImageFeature
 
 
 class ModuleReference:

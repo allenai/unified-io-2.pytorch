@@ -12,11 +12,11 @@ import torch
 from PIL import Image
 from transformers import LogitsProcessor
 
-from unified_io_2 import config
-from unified_io_2.hifigan.models import Generator as HifiganGenerator
-from unified_io_2.preprocessing import UnifiedIOPreprocessing
-from unified_io_2.prompt import Prompt
-from unified_io_2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
+from uio2 import config
+from uio2.hifigan.models import Generator as HifiganGenerator
+from uio2.preprocessing import UnifiedIOPreprocessing
+from uio2.prompt import Prompt
+from uio2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
   extra_id_to_float, extract_locations_from_token_ids, undo_image_preprocessing
 
 HUMAN_POSE_PART = [

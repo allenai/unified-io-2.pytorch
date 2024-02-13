@@ -10,13 +10,13 @@ from huggingface_hub import PyTorchModelHubMixin
 from transformers import ProcessorMixin, FeatureExtractionMixin
 from transformers.utils import PushToHubMixin
 
-from unified_io_2 import config
-from unified_io_2.audio_utils import load_audio
-from unified_io_2.config import get_tokenizer, Config
-from unified_io_2.data_utils import resize_and_pad_default, values_to_tokens
-from unified_io_2.get_modality_processor import get_input_modalities, get_target_modalities
-from unified_io_2.utils import flatten_dict
-from unified_io_2.video_utils import load_video
+from uio2 import config
+from uio2.audio_utils import load_audio
+from uio2.config import get_tokenizer, Config
+from uio2.data_utils import resize_and_pad_default, values_to_tokens
+from uio2.get_modality_processor import get_input_modalities, get_target_modalities
+from uio2.utils import flatten_dict
+from uio2.video_utils import load_video
 
 
 class UnifiedIOPreprocessing(FeatureExtractionMixin):
@@ -28,7 +28,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
   }
 
   @staticmethod
-  def from_config(cfg, tokenizer):
+  def from_config(cfg: Config, tokenizer):
     input_encoders = get_input_modalities(
       cfg.input_modalities, cfg.image_vit_cfg, cfg.audio_vit_cfg,
       cfg.image_history_cfg, cfg.audio_history_cfg, cfg.use_image_vit, cfg.use_audio_vit,
@@ -64,11 +64,11 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
       # Assume a path to the tokenizer file
       tokenizer = get_tokenizer(tokenizer)
     self.tokenizer = tokenizer
-    self.config = config
+    self.config = config  # Only needed if saving the Preprocessor
 
   def to_dict(self):
-    # Our configuration does not cleanly distinguish pre-processing and model config
-    # To avoid a significant re-write, we just dump everything as part the pre-processor config
+    # Our configuration does not cleanly distinguish pre-processing and model config options
+    # To avoid a significant re-write, we just dump everything as part of the pre-processor config
     if self.config is None:
       raise ValueError("Config must be given to convert to dictionary")
     out = dict(config=self.config.to_dict())

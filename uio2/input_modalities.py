@@ -7,11 +7,11 @@ import einops
 import torch
 import torch.nn as nn
 
-from unified_io_2.config import Config, T5Config, ImageResamplerConfig, AudioResamplerConfig
-from unified_io_2.data_utils import normalize_image, sample_patches, trim_or_pad_tf_2d
-from unified_io_2.seq_features import InputSequence
-from unified_io_2 import layers, config
-from unified_io_2.perceiver import Resampler
+from uio2.config import Config, T5Config, ImageResamplerConfig, AudioResamplerConfig
+from uio2.data_utils import normalize_image, sample_patches, trim_or_pad_tf_2d
+from uio2.seq_features import InputSequence
+from uio2 import layers, config
+from uio2.perceiver import Resampler
 import tensorflow as tf
 import numpy as np
 

@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 Load the model with 
 ```
-from unified_io_2.model import UnifiedIOModel
+from uio2.model import UnifiedIOModel
 model = UnifiedIOModel.from_pretrained("allenai/uio2-large")
 ```
 This loads the large (1B) model, load the XL (3B) or XXL (7B) with 
@@ -28,7 +28,7 @@ This loads the large (1B) model, load the XL (3B) or XXL (7B) with
 This model requires pre-processed tensor inputs. Pre-processing is done by `UnifiedIOPreprocessing`: 
 
 ```
-from unified_io_2.preprocessing import UnifiedIOPreprocessing 
+from uio2.preprocessing import UnifiedIOPreprocessing 
 preprocessor = UnifiedIOPreprocessing.from_pretrained("allenai/uio2-preprocessor", tokenizer="/path/to/tokenizer")
 ```
 
@@ -49,7 +49,7 @@ This will remove some unneeded parameters from the model.
 The model can also be built from scratch by directly using a config:
 
 ```
-from unified_io_2 import config 
+from uio2 import config 
 preprocessor = UnifiedIOPreprocessing.from_config(config.LARGE, /path/to/tokenizer)
 model = UnifiedIO(config.LARGE)
 ```
@@ -73,7 +73,7 @@ model = UnifiedIOModel.from_pretrained("allenai/uio2-large-bfloat16")
 Do text generation
 
 ```
-from unified_io_2.preprocessing import build_batch 
+from uio2.preprocessing import build_batch 
 preprocessed_example = preprocessor(text_inputs="What color is the sky?", target_modality="text")
 batch = build_batch([preprocessed_example], device=model.device)
 tokens = model.generate(batch, modality="text", max_new_tokens=128)
@@ -86,11 +86,11 @@ To see many other examples of generation and how to best configure the model and
 the output, see `TaskRunner` 
 
 ```
-from unified_io_2.runner import TaskRunner
+from uio2.runner import TaskRunner
 
 runner = TaskRunner(model, preprocessor)
 image = runner.image_generation("a cat")
-audio = runner.audio_generation("dogs barking")
+wavform = runner.audio_generation("dogs barking")
 box = runner.refexp("/path/to/image", "the green car")
 keypoint = runner.keypoint("/path/to/image")
 # And many more, see TaskRunner
@@ -111,11 +111,11 @@ Calling the model will produce logits, masks, and targets for each modality.
 If using forward, at least one target modality should be set when calling the 
 preprocessor.
 
-The loss for an example can be computed like this:
+The loss for an example can then be computed like this:
 
 ```
 from torch.nn import functional as F
-from unified_io_2.preprocessing import build_batch
+from uio2.preprocessing import build_batch
 preprocessed_example = preprocessor(
 text_inputs="What is 1+1?", text_targets="2", target_modality="text")
 batch = build_batch([preprocessed_example], device=model.device)

@@ -3,9 +3,9 @@ from typing import Union
 
 import torch
 
-from unified_io_2.config import ImageResamplerConfig, AudioResamplerConfig
+from uio2.config import ImageResamplerConfig, AudioResamplerConfig
 
-from unified_io_2 import layers
+from uio2 import layers
 from torch import nn
 
 

@@ -6,10 +6,10 @@ import math
 import torch
 from einops import einops
 
-from unified_io_2.config import VQGANConfig
+from uio2.config import VQGANConfig
 from torch import nn
 from torch.nn import functional as F
-from unified_io_2 import layers
+from uio2 import layers
 
 
 def Normalize(in_channels):

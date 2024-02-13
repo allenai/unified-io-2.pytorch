@@ -7,7 +7,7 @@ from typing import Optional, List
 import numpy as np
 import scipy
 
-from unified_io_2 import config
+from uio2 import config
 
 
 BUFFER_FROM_END = 0.1

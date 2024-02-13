@@ -1,9 +1,12 @@
-"""Audio ViT that builds features from spectograms"""
+"""Model that builds patch features from an image"""
+import math
 from typing import Any, Optional
+
 import torch
 
-from unified_io_2 import layers
-from unified_io_2.config import AudioVitFeatureConfig
+from uio2.config import ImageVitFeatureConfig, AudioVitFeatureConfig
+
+from uio2 import layers
 from torch import nn
 from torch.nn import functional as F
 
@@ -13,7 +16,7 @@ class MLP(nn.Module):
     super().__init__()
     self.config = config
     self.fc1 = nn.Linear(config.emb_dim, config.mlp_dim, bias=True)
-    self.gelu = nn.GELU(approximate='tanh') # The uio2 jax code used the tanh approximation.
+    self.gelu = nn.GELU(approximate='none')
     self.fc2 = nn.Linear(config.mlp_dim, config.emb_dim, bias=True)
   
   def forward(self, x):
@@ -21,7 +24,7 @@ class MLP(nn.Module):
     x = self.gelu(x)
     x = self.fc2(x)
     return x
-
+  
 
 class MultiHeadDotProductAttention(nn.Module):
   def __init__(
@@ -98,7 +101,7 @@ class ResidualAttentionBlock(nn.Module):
   def __init__(self, config):
     super().__init__()
     self.config = config
-    self.ln_1 = nn.LayerNorm(config.emb_dim, eps=1e-6)
+    self.ln_1 = nn.LayerNorm(config.emb_dim, eps=1e-5)
     self.attn = MultiHeadDotProductAttention(
         config.emb_dim,
         config.num_heads,
@@ -107,7 +110,7 @@ class ResidualAttentionBlock(nn.Module):
         # The uio2 jax code did not use this parameter.
         # float32_logits=config.float32_attention_logits
     )
-    self.ln_2 = nn.LayerNorm(config.emb_dim, eps=1e-6)
+    self.ln_2 = nn.LayerNorm(config.emb_dim, eps=1e-5)
     self.mlp = MLP(config)
   
   def forward(self, x, attn_mask):
@@ -148,78 +151,67 @@ class VisionTransformer(nn.Module):
     super().__init__()
     self.config = config
 
-    input_dim = config.patch_size * config.patch_size * 1
-    self.embedding = nn.Linear(input_dim, config.emb_dim, bias=True)
-    self.cls_token = nn.Parameter(torch.zeros(config.emb_dim))
-    self.dist_token = nn.Parameter(torch.zeros(config.emb_dim))
-    self.positional_embedding = nn.Parameter(torch.zeros(514, config.emb_dim))
+    input_dim = config.patch_size * config.patch_size * 3
+    self.embedding = nn.Linear(input_dim, config.emb_dim, bias=False)
+    scale = config.emb_dim
+    self.class_embedding = nn.Parameter(scale * torch.randn(config.emb_dim))
+    self.positional_embedding = nn.Parameter(scale * torch.randn(config.num_pos, config.emb_dim))
+    self.pre_ln = nn.LayerNorm(config.emb_dim, eps=1e-5)
     self.transformer = Transformer(config)
 
-  def add_pos_emb(self, x, pos_ids):
+  def add_pos_emb(self, x, pos_ids, patch_num):
     cls_emb = self.positional_embedding[0]
-    dist_emb = self.positional_embedding[1]
-    pos_emb = self.positional_embedding[2:][pos_ids]
+    pos_emb = self.positional_embedding[1:]
 
-    x = x + torch.cat(
-      [
-        _expand_token(cls_emb, x.shape[0]),
-        _expand_token(dist_emb, x.shape[0]),
-        pos_emb,
-      ],
-      dim=1,
-    ).to(x.dtype)
+    pos_emb = pos_emb.reshape(
+      (int(math.sqrt(pos_emb.shape[0])), int(math.sqrt(pos_emb.shape[0])), pos_emb.shape[1])
+    )
+    
+    (patch_num_0, patch_num_1) = patch_num
+    # assert patch_num_0 == self.config.patch_size and patch_num_1 == self.config.patch_size_1
+    if pos_emb.shape[0] != patch_num_0 or pos_emb.shape[1] != patch_num_1:
+      # Dervied from https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
+      # antialias: default True in jax.image.resize
+      pos_emb = pos_emb.unsqueeze(0).permute(0, 3, 1, 2)
+      pos_emb = F.interpolate(
+        pos_emb, size=(patch_num_0, patch_num_1), mode="bicubic", align_corners=False, antialias=True,
+      )
+      pos_emb = pos_emb.permute(0, 2, 3, 1).squeeze(0)
+
+    pos_emb = pos_emb.reshape(-1, pos_emb.shape[-1])[pos_ids]
+    x = x + torch.cat([_expand_token(cls_emb, x.shape[0]), pos_emb], dim=1).to(x.dtype)
     return x
   
   def forward(self, x, mask, pos_ids, *, patch_num: Any = (16, 16)):
     B = x.shape[0]
     x = self.embedding(x)
-    x = torch.cat([_expand_token(self.cls_token, B).to(x.dtype), _expand_token(self.dist_token, B).to(x.dtype), x], dim=1)
+    x = torch.cat([_expand_token(self.class_embedding, B).to(x.dtype), x], dim=1)
 
-    mask = torch.cat(
-      [
-        torch.ones([B, 1], dtype=torch.int32, device=mask.device),
-        torch.ones([B, 1], dtype=torch.int32, device=mask.device),
-        mask,
-      ],
-      dim=1
-    )
+    mask = torch.cat([torch.ones([B, 1], dtype=torch.int32, device=mask.device), mask], dim=1)
 
-    x = self.add_pos_emb(x, pos_ids)
+    x = self.add_pos_emb(x, pos_ids, patch_num)
+
+    x = self.pre_ln(x)
 
     attn_mask = layers.make_attention_mask(mask, mask).to(x.dtype)
 
     x, xs = self.transformer(x, attn_mask)
 
-    # remove the cls/dist token
-    x = x[:, 2:, :]
+    # remove the cls token
+    x = x[:, 1:, :]
 
-    x1 = xs[1][:, 2:, :]
+    x1 = xs[1][:, 1:, :]
 
     return x, x1
 
 
-def transpose_input(pos_ids, input_size, patch_size):
-  h, w = (
-    int(input_size[0] / patch_size),
-    int(input_size[1] / patch_size),
-  )
-  w_coord = pos_ids % w
-  h_coord = pos_ids // w
-  pos_ids_t = w_coord * h + h_coord
-
-  return pos_ids_t
-
-
-class AudioFeature(nn.Module):
-  """Converts mel-spectrograms into features"""
-
+class ImageFeature(nn.Module):
+  """Image features"""
   def __init__(self, config) -> None:
     super().__init__()
     self.config = config
     self.vision_transformer = VisionTransformer(config)
-
-  def forward(self, x, mask, pos_ids, *, patch_num: Any = (16, 8)):
-    if self.config.transpose_input:
-      pos_ids = transpose_input(pos_ids, self.config.default_input_size, self.config.patch_size)
-    x, x1 = self.vision_transformer(x, mask, pos_ids)
+    
+  def forward(self, x, mask, pos_ids, *, patch_num: Any = (16, 16)):
+    x, x1 = self.vision_transformer(x, mask, pos_ids, patch_num=patch_num)
     return x, x1

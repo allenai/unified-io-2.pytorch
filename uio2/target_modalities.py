@@ -5,13 +5,13 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from unified_io_2.config import T5Config, VQGANConfig, AudioViTVQGANConfig
-from unified_io_2.data_utils import make_autoregressive_inputs
-from unified_io_2.input_modalities import ModalityEncoder
-from unified_io_2.seq_features import TargetSequence
-from unified_io_2.image_vqgan import VQGAN
-from unified_io_2.audio_vqgan import ViTVQGAN
-from unified_io_2 import layers, config
+from uio2.config import T5Config, VQGANConfig, AudioViTVQGANConfig
+from uio2.data_utils import make_autoregressive_inputs
+from uio2.input_modalities import ModalityEncoder
+from uio2.seq_features import TargetSequence
+from uio2.image_vqgan import VQGAN
+from uio2.audio_vqgan import ViTVQGAN
+from uio2 import layers, config
 import tensorflow as tf
 
 

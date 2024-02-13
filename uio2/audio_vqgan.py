@@ -1,9 +1,9 @@
 """ViTVQGAN model implementation in PyTorch"""
 import torch
 
-from unified_io_2.config import AudioViTVQGANConfig
+from uio2.config import AudioViTVQGANConfig
 
-from unified_io_2 import layers
+from uio2 import layers
 import math
 from torch import nn
 

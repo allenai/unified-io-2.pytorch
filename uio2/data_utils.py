@@ -4,7 +4,7 @@ from typing import Optional
 import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
 
-from unified_io_2 import config
+from uio2 import config
 
 
 def apply_with_random_selector(x, func, num_cases):
