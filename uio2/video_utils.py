@@ -3,7 +3,9 @@ import logging
 import os.path
 import subprocess
 from io import BytesIO
-
+import numpy
+numpy.float = numpy.float64
+numpy.int = numpy.int_
 import numpy as np
 
 from uio2.audio_utils import read_audio_file, extract_spectrograms_from_audio
@@ -76,20 +78,10 @@ def get_num_segments(video_length, video_segment_length):
 
 def extract_frames_from_video(video_path,
                               video_length,
-                              video_segment_length,
+                              video_segment_length=None,
                               times=None,
-                              clip_start_time=0,
-                              clip_end_time=None,
                               num_frames=None):
   if times is None:  # automatically calculate the times if not set
-
-    if video_length is None:
-      video_length = get_video_length(video_path)
-
-    if clip_end_time is not None:
-      clip_duration = clip_end_time - clip_start_time
-      if clip_duration <= video_length:
-        video_length = clip_duration
 
     # make sure one and only one of video_segment_length and num_frames is None
     assert video_segment_length is not None or num_frames is not None
@@ -102,7 +94,7 @@ def extract_frames_from_video(video_path,
       num_segments = num_frames
 
     # frames are located at the midpoint of a segment
-    boundaries = np.linspace(clip_start_time, clip_end_time, num_segments + 1).tolist()
+    boundaries = np.linspace(0, video_length, num_segments + 1).tolist()
     extract_times = [(boundaries[i] + boundaries[i+1]) / 2.0 for i in range(num_segments)]
   else:
     extract_times = times
@@ -115,7 +107,7 @@ def extract_frames_from_video(video_path,
   if any([x is None for x in frames]) or frames is None or len(frames) == 0:
     raise ValueError(f"Failed to extract frames from {video_path}")
 
-  return np.stack(frames).astype(np.uint8), boundaries
+  return np.stack(frames).astype(np.uint8)
 
 
 def extract_frames_and_spectrograms_from_video(
@@ -124,8 +116,6 @@ def extract_frames_and_spectrograms_from_video(
     video_segment_length=None,
     audio_segment_length=None,
     times=None,
-    clip_start_time=0,
-    clip_end_time=None,
     num_frames=None,
     *,
     use_audio,
@@ -137,34 +127,36 @@ def extract_frames_and_spectrograms_from_video(
       if video_length is None:
         raise ValueError(f"Couldn't get video length for {video_file}")
 
-    if video_segment_length is None:
-      video_segment_length = video_length / num_frames
-    if video_length < (video_segment_length / 2.0) - BUFFER_FROM_END:
+    # make sure one and only one of video_segment_length and num_frames is None
+    assert video_segment_length is not None or num_frames is not None
+    assert video_segment_length is None or num_frames is None
+
+    _video_segment_length = video_length / num_frames if video_segment_length is None else video_segment_length
+    if video_length < (_video_segment_length / 2.0) - BUFFER_FROM_END:
       raise ValueError(
-        f"Video is too short ({video_length}s is less than half the segment length of {video_segment_length}s segments")
+        f"Video is too short ({video_length}s is less than half the segment length of {_video_segment_length}s segments")
   else:
     # don't need this if times is given
     video_length = None
 
-  frames, boundaries = extract_frames_from_video(
+  frames = extract_frames_from_video(
     video_file,
     video_length,
-    video_segment_length,
+    video_segment_length=video_segment_length,
     times=times,
-    clip_start_time=clip_start_time,
-    clip_end_time=clip_end_time,
     num_frames=num_frames,
   )
 
   spectrograms = None
   if use_audio:
+    assert times is None, "Can't use audio with specific times"
     wav_bytes = exact_audio_from_video(video_file)
     if wav_bytes is not None:
       waveform = read_audio_file(BytesIO(wav_bytes))
       spectrograms = extract_spectrograms_from_audio(
         waveform,
-        audio_length=clip_end_time,
-        audio_segment_length=audio_segment_length,
+        audio_length=video_length,
+        audio_segment_length=_video_segment_length,
         spectrogram_length=audio_segment_length,
       )
 
@@ -181,26 +173,11 @@ def load_video(
     raise ValueError("Need to install skvideo to load videos")
 
   assert os.path.exists(path), path
-  video_length = get_video_length(path)
-  clip_end_time, video_seg_length = None, None
-  if video_length is not None and use_audio:
-    max_length = max_frames * audio_segment_length
-    clip_end_time = min(max_length, video_length)
-    if clip_end_time < video_length:
-      # Have to cut off some of the video we can load all of its audio in `max_frames`
-      # audio segments
-      logging.warning(
-        f"Use the input video length of {clip_end_time} (original {video_length}) seconds.")
-    video_seg_length = clip_end_time / max_frames
 
   frames, spectrograms = extract_frames_and_spectrograms_from_video(
     path,
-    video_length=video_length,
-    video_segment_length=video_seg_length,
     audio_segment_length=audio_segment_length,
-    clip_start_time=0,
-    clip_end_time=clip_end_time,
-    num_frames=None,
+    num_frames=max_frames,
     use_audio=use_audio,
   )
   return frames, spectrograms
