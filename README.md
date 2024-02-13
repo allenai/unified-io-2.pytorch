@@ -3,10 +3,10 @@
 This repo is an official pytorch port of [UnifiedIO-2](https://unified-io-2.allenai.org/). The original jax code can be found
 [here](https://github.com/allenai/unified-io-2).
 
-UnifiedIO-2 is a multi-modal that can generate text, images,
+UnifiedIO-2 is a multi-modal system that can generate text, images,
 and audio with text, audio, image, or video as input. It
 can answer free-form queries as well as many particular
-tasks that have be studied in these modalities (e.g., 
+tasks that have been studied in these modalities (e.g., 
 surface normal estimation, keypoint estimation, audio
 captioning, ect.)
 
