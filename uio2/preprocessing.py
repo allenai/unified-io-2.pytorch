@@ -91,6 +91,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
       video_inputs=None, use_video_audio=True,
       encode_frame_as_image=-1,
       encode_audio_segment_as_audio=-1,
+      image_history=None,
 
       image_targets=None, audio_targets=None, text_targets=None,
 
@@ -109,10 +110,11 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
                  will be tokenized and replace the keyword ``{box}` in text_inputs
       image_inputs: RGB image or image file
       audio_inputs: Audio spectrograms in [N, 256, 128] format or audio file
-      video_inputs: RGB by time video in float32 format or video file
-      use_video_audio: Extract audio from the `video_inputs``
+      video_inputs: [n, W, H, 3] tensor of images or a video file
+      use_video_audio: Extract audio from the `video_inputs` if it is a file
       encode_frame_as_image: If given a video, encode this frame of that video as an image
       encode_audio_segment_as_audio: Encode this audio segment with the audio modality
+      image_history: List of images, can not be set if `video_inputs` is used.
 
       # Targets
       text_targets: String text targets
@@ -159,8 +161,18 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
     # Information about how the input image was resized
     resize_meta = None
 
+    if image_history is not None:
+      assert video_inputs is None
+      image_history = [self.load_image(x) if isinstance(x, str) else x for x in image_history]
+      parts = [resize_and_pad_default(x, is_training, is_input=True, is_history=True)
+               for x in image_history]
+      features["image_history_inputs"] = tf.stack([x[0] for x in parts])
+      features["image_history_input_masks"] = tf.stack([x[1] for x in parts])
+
     video_audio = None
     if video_inputs is not None:
+      if encode_frame_as_image is not None and image_inputs is not None:
+        raise ValueError("Asked to encode a frame as an image, but also given an image input")
       max_frame = self.sequence_length["num_frames"]
       if encode_frame_as_image is not None:
         # image_inputs will use the last frame
@@ -177,10 +189,14 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
       if encode_frame_as_image is None:
         video_inputs, video_mask, _ = resize_and_pad_default(
           video_inputs, is_training, is_input=True, is_history=True)
+      elif not is_training:
+        image_inputs = video_inputs[encode_frame_as_image]
+        video_inputs = np.delete(video_inputs, encode_frame_as_image, axis=0)
+        video_inputs, video_mask, _ = resize_and_pad_default(
+          video_inputs, is_training, is_input=True, is_history=True)
       else:
-        if image_inputs is not None:
-          raise ValueError("Have image from both the video and `image_inputs`")
-        # resize to image_input_size first for the image inputs
+        # Make sure augmentation effects the image and history in the same way
+        # by applying `resize_and_pad_default` to them in the same way
         video_inputs, video_mask, resize_meta = resize_and_pad_default(
           video_inputs, is_training, boxes=boxes,
           masks=image_targets, is_input=True)
