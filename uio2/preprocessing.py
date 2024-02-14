@@ -111,7 +111,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
       audio_inputs: Audio spectrograms in [N, 256, 128] format or audio file
       video_inputs: RGB by time video in float32 format or video file
       use_video_audio: Extract audio from the `video_inputs``
-      encode_frame_as_image: If given a video, encode the last/first frame of that video as an image
+      encode_frame_as_image: If given a video, encode this frame of that video as an image
       encode_audio_segment_as_audio: Encode this audio segment with the audio modality
 
       # Targets
@@ -177,6 +177,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
       else:
         if image_inputs is not None:
           raise ValueError("Have image from both the video and `image_inputs`")
+        # resize to image_input_size first for the image inputs
         video_inputs, video_mask, resize_meta = resize_and_pad_default(
           video_inputs, is_training, boxes=boxes,
           masks=image_targets, is_input=True)
@@ -185,6 +186,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
         features["image_input_masks"] = video_mask[encode_frame_as_image]
         video_inputs = np.delete(video_inputs, encode_frame_as_image, axis=0)
         video_mask = np.delete(video_mask, encode_frame_as_image, axis=0)
+        # now resize the video into the correct video size
         video_inputs = tf.image.resize(
           video_inputs,
           config.IMAGE_HISTORY_INPUT_SIZE,
@@ -255,7 +257,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
           method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)[:, :, 0]
         features["image_target_masks"] = target_mask
       else:
-        # Resize the image independent
+        # Resize the image independently
         image_targets, image_targets_mask, other = resize_and_pad_default(
           image_targets, is_training, is_input=False)
         features["image_targets"] = image_targets
