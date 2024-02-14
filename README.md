@@ -29,7 +29,7 @@ This model requires pre-processed tensor inputs. Pre-processing is done by `Unif
 
 ```
 from uio2.preprocessing import UnifiedIOPreprocessing 
-preprocessor = UnifiedIOPreprocessing.from_pretrained("allenai/uio2-preprocessor", tokenizer="/path/to/tokenizer")
+preprocessor = UnifiedIOPreprocessor.from_pretrained("allenai/uio2-preprocessor", tokenizer="/path/to/tokenizer")
 ```
 
 Here "/path/to/tokenizer" needs to point to the LLaMa tokenizer file. The tokenizer

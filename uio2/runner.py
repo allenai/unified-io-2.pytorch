@@ -14,7 +14,7 @@ from transformers import LogitsProcessor
 
 from uio2 import config
 from uio2.hifigan.models import Generator as HifiganGenerator
-from uio2.preprocessing import UnifiedIOPreprocessing
+from uio2.preprocessing import UnifiedIOPreprocessor
 from uio2.prompt import Prompt
 from uio2.utils import flatten_dict, pad_and_stack, token_to_float, undo_box_preprocessing, \
   extra_id_to_float, extract_locations_from_token_ids, undo_image_preprocessing
@@ -231,7 +231,7 @@ class TaskRunner:
   To run these tasks efficiently batch the inputs and run the pre-processing inside a DataLoader.
   """
 
-  def __init__(self, model, uio2_preprocessor: UnifiedIOPreprocessing, prompts=None,
+  def __init__(self, model, uio2_preprocessor: UnifiedIOPreprocessor, prompts=None,
                use_hifigan_for_audio=True):
     self.model = model
     self.uio2_preprocessor = uio2_preprocessor

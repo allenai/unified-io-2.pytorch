@@ -19,7 +19,7 @@ from uio2.utils import flatten_dict
 from uio2.video_utils import load_video, remove_bars_from_frames
 
 
-class UnifiedIOPreprocessing(FeatureExtractionMixin):
+class UnifiedIOPreprocessor(FeatureExtractionMixin):
 
   PREFIXES = {
     "text": "[Text] [S] ",
@@ -36,7 +36,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
     )
     target_encoders = get_target_modalities(
       cfg.target_modalities, cfg.image_vqgan, cfg.audio_vqgan)
-    return UnifiedIOPreprocessing(
+    return UnifiedIOPreprocessor(
       input_encoders, target_encoders, cfg.sequence_length, tokenizer, cfg)
 
   @staticmethod
@@ -46,7 +46,7 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
     cfg = Config.from_dict(data["config"])
     if sequence_length is not None:
       cfg.sequence_length = sequence_length
-    return UnifiedIOPreprocessing.from_config(cfg, tokenizer)
+    return UnifiedIOPreprocessor.from_config(cfg, tokenizer)
 
   def __init__(
       self,
