@@ -649,9 +649,9 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       tokens = torch.reshape(tokens, [-1, 32, 16])
       tokens = tokens.transpose(2, 1).reshape(tokens.shape[0], -1)
       spectogram = self.target_embedders["audio"].vqgan.decode_code(tokens)
-      spectogram = torch.unsqueeze(torch.squeeze(spectogram, 1), -1)
+      spectogram = torch.unsqueeze(torch.squeeze(spectogram, 1), -1)  # [batch_size, 128, 256, 1]
       if output_dict is None:
-        return spectogram  # [batch_size, 128, 256, 1]
+        return spectogram
       else:
         output_dict["spectogram"] = spectogram
 
@@ -672,10 +672,10 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       self,
       batch,
   ) -> Dict[str, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    """Forward pass to compute the loss of examples in `batch`
+    """Compute the logits of the examples in `batch`
 
     Args:
-      batch: batch of pre-processing
+      batch: batch of pre-processed inputs
 
     Returns: dictionary of (logits, targets, masks) for each modaltiy in the batch
     """
@@ -723,6 +723,7 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
       attn_pattern_mask=target_seq.attn_pattern_mask,
     )
 
+    # per-modality hidden states
     embedding_parts = torch.split(
       hidden_state, [x.seq_len for x in target_parts], dim=1)
 

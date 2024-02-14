@@ -61,7 +61,7 @@ The model can be run in `bfloat16`, typically we have done this while keeping th
 model.to_dtype(torch.bfloat16, vit_dtype=torch.float32, vqgan_dtype=torch.float32)
 ```
 
-We provide pre-trained models in this format to reduce memory/bandwidth requirements 
+We provide pre-trained models in this format to reduce bandwidth/memory requirements 
 when downloading/loading the models:  
 
 ```
@@ -80,7 +80,8 @@ tokens = model.generate(batch, modality="text", max_new_tokens=128)
 ```
 
 `modality` can be set to `"image"` or `"audio"`. Image will return a `[256, 256, 3]` image, and 
-audio will return a `[128. 256, 1]` mel-spectrogram. 
+audio will return a `[128. 256, 1]` mel-spectrogram. See `UnifiedIOPreprocessor` for the various
+kinds of input the model supports.
 
 To see many other examples of generation and how to best configure the model and post-process
 the output, see `TaskRunner` 
