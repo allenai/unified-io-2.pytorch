@@ -16,7 +16,7 @@ from uio2.config import get_tokenizer, Config
 from uio2.data_utils import resize_and_pad_default, values_to_tokens
 from uio2.get_modality_processor import get_input_modalities, get_target_modalities
 from uio2.utils import flatten_dict
-from uio2.video_utils import load_video
+from uio2.video_utils import load_video, remove_bars_from_frames
 
 
 class UnifiedIOPreprocessing(FeatureExtractionMixin):
@@ -170,6 +170,9 @@ class UnifiedIOPreprocessing(FeatureExtractionMixin):
       else:
         assert video_inputs.shape[0] <= max_frame
       assert len(video_inputs.shape) == 4 and video_inputs.shape[-1] == 3
+
+      # remove black bars
+      video_inputs = remove_bars_from_frames(video_inputs, black_bar=True, threshold=16)
 
       if encode_frame_as_image is None:
         video_inputs, video_mask, _ = resize_and_pad_default(

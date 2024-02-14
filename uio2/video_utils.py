@@ -181,3 +181,35 @@ def load_video(
     use_audio=use_audio,
   )
   return frames, spectrograms
+
+
+def remove_bars_from_frames(frames, black_bar=True, threshold=32, max_perc_to_trim=0.3):
+    """
+    :param frames: [num_frames, height, width, 3]
+    :param blackbar_threshold: Pixels must be this intense for us to not trim
+    :param max_perc_to_prim: Will trim x% by default of the image at most in each dimension
+    :return:
+    """
+    # Detect black bars####################
+    h, w = frames.shape[1], frames.shape[2]
+    if black_bar:
+      has_content = frames.max(axis=(0, -1)) >= threshold
+    else:
+      has_content = frames.min(axis=(0, -1)) <= threshold
+
+    y_frames = np.where(has_content.any(1))[0]
+    if y_frames.size == 0:
+      y_frames = [h // 2]
+    
+    y1 = min(y_frames[0], int(h * max_perc_to_trim))
+    y2 = max(y_frames[-1] + 1, int(h * (1 - max_perc_to_trim)))
+
+    x_frames = np.where(has_content.any(0))[0]
+    if x_frames.size == 0:
+      x_frames = [w // 2]
+    
+    x1 = min(x_frames[0], int(w * max_perc_to_trim))
+    x2 = max(x_frames[-1] + 1, int(w * (1 - max_perc_to_trim)))
+
+    frames = frames[:, y1:y2, x1:x2]
+    return frames
