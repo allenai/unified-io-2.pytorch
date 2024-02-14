@@ -1,4 +1,4 @@
-transformers
+transformers>=v4.36.0  # For new caching abstraction from transformers 4.36.0
 numpy
 scipy
 tensorflow  # Some of our pre-processing code is still in tensorflow
