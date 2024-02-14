@@ -530,9 +530,10 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
     if generation_config is None:
       # Build default config
       generation_config = GenerationConfig(
+        max_length=None,  # Avoid warning about preferring max_new_tokens
         bos_token_id=0,
         eos_token_id=1,
-        # We generally use 0 for padding, but having pad==bos triggesrs a superfluous
+        # We generally use 0 for padding, but having pad==bos triggers a superfluous
         # warning from GenerationMixin so we just tell it 1 to keep it quiet
         pad_token_id=1,
       )
@@ -544,6 +545,8 @@ class UnifiedIOModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
           generation_config.top_p = 0.95
         else:
           generation_config.length_penalty = 0
+      else:
+        generation_config.max_new_tokens = 512
 
     if modality not in self.target_embedders:
       raise ValueError(f"No target encoder for {modality}")
