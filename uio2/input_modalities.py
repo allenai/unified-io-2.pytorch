@@ -259,7 +259,12 @@ class InputImageViTEncoder(ModalityEncoder):
 class ViTHistoryEmbedder(nn.Module):
   """Embeds image or audio history using an encoder and then a perciever"""
   def __init__(
-      self, vit_image_encoder, resampler_config: Union[ImageResamplerConfig, AudioResamplerConfig], config: T5Config, modality, max_images_per_example,
+      self,
+      vit_image_encoder,
+      resampler_config: Union[ImageResamplerConfig, AudioResamplerConfig],
+      config: T5Config,
+      modality: str,
+      max_images_per_example: int,
   ) -> None:
     super().__init__()
     self.vit_image_encoder = vit_image_encoder

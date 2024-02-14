@@ -633,6 +633,7 @@ class TaskRunner:
     return masks
 
   def audio_generation(self, text, use_prompt=True, guidance_scale=0, num_out=None, top_p=0.9):
+    """Generate an audio clip from text"""
     if use_prompt:
       prompt = self.prompt.random_prompt("Audio_Generation")
       prompt = prompt.replace("{}", text)
@@ -642,6 +643,7 @@ class TaskRunner:
     example = self.singleton_batch(example)
 
     if guidance_scale:
+      # Generally not helpful for audio, but can be worth experimenting with
       negative_prompt = self.uio2_preprocessor(
         text_inputs=AUDIO_CLF_FREE_PROMPT, target_modality="audio")
       negative_prompt = self.singleton_batch(negative_prompt)
