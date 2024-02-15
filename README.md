@@ -25,10 +25,10 @@ model = UnifiedIOModel.from_pretrained("allenai/uio2-large")
 This loads the large (1B) model, load the XL (3B) or XXL (7B) with 
 `chrisc36/uio2-dbg-xl` and `chrisc36/uio2-dbg-xxl`.
 
-This model requires pre-processed tensor inputs. Pre-processing is done by `UnifiedIOPreprocessing`: 
+This model requires pre-processed tensor inputs. Pre-processing is done by `UnifiedIOPreprocessor`:
 
 ```
-from uio2.preprocessing import UnifiedIOPreprocessing 
+from uio2.preprocessing import UnifiedIOPreprocessor
 preprocessor = UnifiedIOPreprocessor.from_pretrained("allenai/uio2-preprocessor", tokenizer="/path/to/tokenizer")
 ```
 
@@ -50,7 +50,7 @@ The model can also be built from scratch by directly using a config:
 
 ```
 from uio2 import config 
-preprocessor = UnifiedIOPreprocessing.from_config(config.LARGE, /path/to/tokenizer)
+preprocessor = UnifiedIOPreprocessor.from_config(config.LARGE, /path/to/tokenizer)
 model = UnifiedIO(config.LARGE)
 ```
 
